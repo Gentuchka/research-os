@@ -58,6 +58,8 @@ roles:
       - consume_budget
       - get_node
       - graph_statistics
+      - dispatch_worker
+      - get_activity
     deny:
       - apply_transaction
       - submit_report
@@ -65,3 +67,4 @@ roles:
   human:
     tools: all
     deny: []
+

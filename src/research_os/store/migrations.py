@@ -4,9 +4,9 @@ from __future__ import annotations
 
 import sqlite3
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 4
 
-MIGRATIONS: list[str] = [
+V1_TABLES: list[str] = [
     """
     CREATE TABLE IF NOT EXISTS schema_version (
         version INTEGER NOT NULL
@@ -78,7 +78,8 @@ MIGRATIONS: list[str] = [
         event_type TEXT NOT NULL,
         payload_json TEXT NOT NULL,
         created_at TEXT NOT NULL,
-        transaction_id TEXT NOT NULL
+        transaction_id TEXT NOT NULL,
+        node_id TEXT
     );
     """,
     """
@@ -117,27 +118,156 @@ MIGRATIONS: list[str] = [
         created_at TEXT NOT NULL,
         accepted INTEGER NOT NULL,
         git_commit_sha TEXT,
+        projection_status TEXT,
         payload_json TEXT NOT NULL
     );
     """,
+]
+
+V1_INDEXES: list[str] = [
+    "CREATE INDEX IF NOT EXISTS idx_math_edges_from ON math_edges(from_id);",
+    "CREATE INDEX IF NOT EXISTS idx_math_edges_to ON math_edges(to_id);",
+    "CREATE INDEX IF NOT EXISTS idx_objects_status ON objects(status);",
+    "CREATE INDEX IF NOT EXISTS idx_objects_type ON objects(type);",
+    "CREATE INDEX IF NOT EXISTS idx_events_node_id ON events(node_id);",
+]
+
+V2_TABLES: list[str] = [
     """
-    CREATE INDEX IF NOT EXISTS idx_math_edges_from ON math_edges(from_id);
+    CREATE TABLE IF NOT EXISTS reports (
+        id TEXT PRIMARY KEY,
+        report_type TEXT NOT NULL,
+        subject_node_id TEXT NOT NULL,
+        status TEXT NOT NULL,
+        run_id TEXT NOT NULL,
+        payload_json TEXT NOT NULL,
+        created_at TEXT NOT NULL
+    );
     """,
     """
-    CREATE INDEX IF NOT EXISTS idx_math_edges_to ON math_edges(to_id);
+    CREATE TABLE IF NOT EXISTS review_decisions (
+        id TEXT PRIMARY KEY,
+        report_id TEXT NOT NULL,
+        decision TEXT NOT NULL,
+        reason_codes_json TEXT NOT NULL,
+        reviewer_run_id TEXT NOT NULL,
+        transaction_id TEXT,
+        created_at TEXT NOT NULL
+    );
     """,
     """
-    CREATE INDEX IF NOT EXISTS idx_objects_status ON objects(status);
+    CREATE TABLE IF NOT EXISTS review_queue (
+        id TEXT PRIMARY KEY,
+        report_id TEXT NOT NULL UNIQUE,
+        worker_run_id TEXT NOT NULL,
+        reviewer_run_id TEXT,
+        status TEXT NOT NULL,
+        enqueued_at TEXT NOT NULL,
+        decided_at TEXT
+    );
+    """,
+]
+
+V3_TABLES: list[str] = [
+    """
+    CREATE TABLE IF NOT EXISTS jobs (
+        id TEXT PRIMARY KEY,
+        node_id TEXT NOT NULL,
+        status TEXT NOT NULL,
+        priority REAL NOT NULL DEFAULT 0,
+        assigned_run_id TEXT,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+    );
     """,
     """
-    CREATE INDEX IF NOT EXISTS idx_objects_type ON objects(type);
+    CREATE TABLE IF NOT EXISTS agent_runs (
+        id TEXT PRIMARY KEY,
+        role TEXT NOT NULL,
+        status TEXT NOT NULL,
+        node_scope TEXT,
+        task_label TEXT,
+        model_profile TEXT,
+        started_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        ended_at TEXT,
+        last_result_summary TEXT,
+        error_code TEXT,
+        error_message TEXT
+    );
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS agent_events (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        run_id TEXT NOT NULL,
+        event_type TEXT NOT NULL,
+        summary TEXT NOT NULL,
+        payload_json TEXT NOT NULL,
+        created_at TEXT NOT NULL
+    );
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS run_budget_usage (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        run_id TEXT NOT NULL,
+        budget_name TEXT NOT NULL,
+        amount REAL NOT NULL,
+        detail TEXT,
+        created_at TEXT NOT NULL
+    );
     """,
 ]
 
 
-def migrate(conn: sqlite3.Connection) -> None:
-    conn.executescript("\n".join(MIGRATIONS))
-    row = conn.execute("SELECT version FROM schema_version LIMIT 1").fetchone()
+def _current_version(conn: sqlite3.Connection) -> int:
+    row = conn.execute(
+        "SELECT name FROM sqlite_master WHERE type='table' AND name='schema_version'"
+    ).fetchone()
     if row is None:
-        conn.execute("INSERT INTO schema_version(version) VALUES (?)", (SCHEMA_VERSION,))
+        return 0
+    version_row = conn.execute("SELECT version FROM schema_version LIMIT 1").fetchone()
+    return 0 if version_row is None else int(version_row[0])
+
+
+def migrate(conn: sqlite3.Connection) -> None:
+    version = _current_version(conn)
+    if version == 0:
+        for stmt in V1_TABLES:
+            conn.execute(stmt)
+        for stmt in V1_INDEXES:
+            conn.execute(stmt)
+        conn.execute("INSERT INTO schema_version(version) VALUES (?)", (1,))
+        version = 1
+    if version < 2:
+        for stmt in V2_TABLES:
+            conn.execute(stmt)
+        try:
+            conn.execute("ALTER TABLE transactions ADD COLUMN projection_status TEXT")
+        except sqlite3.OperationalError:
+            pass
+        try:
+            conn.execute("ALTER TABLE events ADD COLUMN node_id TEXT")
+        except sqlite3.OperationalError:
+            pass
+        conn.execute("UPDATE schema_version SET version = 2")
+        version = 2
+    if version < 3:
+        for stmt in V3_TABLES:
+            conn.execute(stmt)
+        conn.execute("UPDATE schema_version SET version = 3")
+        version = 3
+    if version < 4:
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS run_budget_usage (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                run_id TEXT NOT NULL,
+                budget_name TEXT NOT NULL,
+                amount REAL NOT NULL,
+                detail TEXT,
+                created_at TEXT NOT NULL
+            );
+            """
+        )
+        conn.execute("UPDATE schema_version SET version = 4")
     conn.commit()

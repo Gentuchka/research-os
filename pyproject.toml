@@ -21,6 +21,9 @@ dev = [
     "pytest-asyncio>=0.25.0",
     "ruff>=0.9.0",
 ]
+sdk = [
+    "cursor-sdk>=1.0.0",
+]
 
 [project.scripts]
 research-os-mcp = "research_os.mcp_server.server:main"

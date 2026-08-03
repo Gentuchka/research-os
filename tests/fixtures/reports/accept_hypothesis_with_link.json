@@ -1,0 +1,32 @@
+{
+  "report_type": "worker",
+  "subject_node_id": "PLACEHOLDER",
+  "summary": "Finite case specialization",
+  "information_delta": [
+    "Proposed finite verification target below 10^6"
+  ],
+  "claims": [
+    {
+      "text": "Checking even integers below 10^6 may yield useful partial evidence.",
+      "speculative": true
+    }
+  ],
+  "proposed_objects": [
+    {
+      "type": "Hypothesis",
+      "title": "Finite Goldbach check",
+      "statement": "Goldbach holds for all even integers below 10^6.",
+      "information_gain": "Creates a computationally testable finite target."
+    }
+  ],
+  "proposed_links": [
+    {
+      "from_id": "$new:0",
+      "to_id": "PLACEHOLDER",
+      "edge_type": "specializes"
+    }
+  ],
+  "literature_refs": [],
+  "estimated_difficulty": 0.5,
+  "confidence": 0.4
+}

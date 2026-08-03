@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import sqlite3
+from datetime import UTC, datetime
 from typing import Any
 
 from research_os.kernel.types import (
@@ -19,6 +20,7 @@ from research_os.kernel.types import (
     SupersedeNodeOp,
     utc_now,
 )
+from research_os.reports.types import ReportStatus, ResearchReport, ReviewDecision
 
 
 class Repository:
@@ -80,10 +82,10 @@ class Repository:
             """
             SELECT event_type, payload_json, created_at, transaction_id
             FROM events
-            WHERE payload_json LIKE ?
+            WHERE node_id = ?
             ORDER BY id
             """,
-            (f"%{node_id}%",),
+            (node_id,),
         ).fetchall()
         return [
             {
@@ -133,13 +135,14 @@ class Repository:
         accepted: bool,
         payload: dict[str, Any],
         git_commit_sha: str | None = None,
+        projection_status: str | None = None,
     ) -> None:
         self.conn.execute(
             """
             INSERT INTO transactions(
                 id, actor_role, actor_run_id, summary, created_at,
-                accepted, git_commit_sha, payload_json
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                accepted, git_commit_sha, projection_status, payload_json
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 tx_id,
@@ -149,8 +152,15 @@ class Repository:
                 utc_now().isoformat(),
                 1 if accepted else 0,
                 git_commit_sha,
+                projection_status,
                 json.dumps(payload),
             ),
+        )
+
+    def update_transaction_projection(self, tx_id: str, status: str) -> None:
+        self.conn.execute(
+            "UPDATE transactions SET projection_status = ? WHERE id = ?",
+            (status, tx_id),
         )
 
     def _append_node(self, tx_id: str, op: AppendNodeOp, now: str) -> None:
@@ -211,6 +221,7 @@ class Repository:
             "NODE_ADMITTED",
             {"node_id": obj.id, "type": obj.type, "status": obj.status},
             now,
+            node_id=obj.id,
         )
 
     def _archive_node(self, tx_id: str, op: ArchiveNodeOp, now: str) -> None:
@@ -352,15 +363,289 @@ class Repository:
         )
 
     def _record_event(
-        self, tx_id: str, event_type: str, payload: dict[str, Any], now: str
+        self,
+        tx_id: str,
+        event_type: str,
+        payload: dict[str, Any],
+        now: str,
+        node_id: str | None = None,
     ) -> None:
         self.conn.execute(
             """
-            INSERT INTO events(event_type, payload_json, created_at, transaction_id)
-            VALUES (?, ?, ?, ?)
+            INSERT INTO events(
+                event_type, payload_json, created_at, transaction_id, node_id
+            ) VALUES (?, ?, ?, ?, ?)
             """,
-            (event_type, json.dumps(payload), now, tx_id),
+            (event_type, json.dumps(payload), now, tx_id, node_id or payload.get("node_id")),
         )
+
+    def literature_exists(self, ref: str) -> bool:
+        if ref.startswith("bootstrap") or ref.startswith("ros_"):
+            return self.object_exists(ref)
+        return ref in self._known_literature()
+
+    def _known_literature(self) -> set[str]:
+        rows = self.conn.execute(
+            "SELECT id FROM objects WHERE type = 'Paper'"
+        ).fetchall()
+        return {row["id"] for row in rows}
+
+    def save_report(self, report: ResearchReport) -> None:
+        self.conn.execute(
+            """
+            INSERT INTO reports(
+                id, report_type, subject_node_id, status, run_id, payload_json, created_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                report.id,
+                report.report_type,
+                report.subject_node_id,
+                report.status,
+                report.run_id,
+                json.dumps(report.payload),
+                report.created_at,
+            ),
+        )
+
+    def get_report(self, report_id: str) -> ResearchReport | None:
+        row = self.conn.execute("SELECT * FROM reports WHERE id = ?", (report_id,)).fetchone()
+        if row is None:
+            return None
+        return ResearchReport(
+            id=row["id"],
+            report_type=row["report_type"],
+            subject_node_id=row["subject_node_id"],
+            status=row["status"],
+            run_id=row["run_id"],
+            payload=json.loads(row["payload_json"]),
+            created_at=row["created_at"],
+        )
+
+    def list_reports_for_node(self, node_id: str) -> list[ResearchReport]:
+        rows = self.conn.execute(
+            "SELECT * FROM reports WHERE subject_node_id = ? ORDER BY created_at",
+            (node_id,),
+        ).fetchall()
+        return [
+            ResearchReport(
+                id=row["id"],
+                report_type=row["report_type"],
+                subject_node_id=row["subject_node_id"],
+                status=row["status"],
+                run_id=row["run_id"],
+                payload=json.loads(row["payload_json"]),
+                created_at=row["created_at"],
+            )
+            for row in rows
+        ]
+
+    def list_pending_reports(self) -> list[ResearchReport]:
+        rows = self.conn.execute(
+            "SELECT * FROM reports WHERE status = ? ORDER BY created_at",
+            (ReportStatus.PENDING.value,),
+        ).fetchall()
+        return [
+            ResearchReport(
+                id=row["id"],
+                report_type=row["report_type"],
+                subject_node_id=row["subject_node_id"],
+                status=row["status"],
+                run_id=row["run_id"],
+                payload=json.loads(row["payload_json"]),
+                created_at=row["created_at"],
+            )
+            for row in rows
+        ]
+
+    def update_report_status(self, report_id: str, status: str) -> None:
+        self.conn.execute("UPDATE reports SET status = ? WHERE id = ?", (status, report_id))
+
+    def enqueue_review(self, report_id: str, worker_run_id: str) -> None:
+        from ulid import ULID
+
+        self.conn.execute(
+            """
+            INSERT INTO review_queue(
+                id, report_id, worker_run_id, reviewer_run_id, status, enqueued_at, decided_at
+            ) VALUES (?, ?, ?, NULL, 'pending', ?, NULL)
+            """,
+            (f"ros_rq_{ULID()}", report_id, worker_run_id, utc_now().isoformat()),
+        )
+
+    def save_review_decision(self, decision: ReviewDecision) -> None:
+        self.conn.execute(
+            """
+            INSERT INTO review_decisions(
+                id, report_id, decision, reason_codes_json, reviewer_run_id,
+                transaction_id, created_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                decision.id,
+                decision.report_id,
+                decision.decision,
+                json.dumps(decision.reason_codes),
+                decision.reviewer_run_id,
+                decision.transaction_id,
+                decision.created_at,
+            ),
+        )
+
+    def list_review_queue(self) -> list[dict[str, Any]]:
+        rows = self.conn.execute(
+            "SELECT * FROM review_queue WHERE status = 'pending' ORDER BY enqueued_at"
+        ).fetchall()
+        return [dict(row) for row in rows]
+
+    def start_run(
+        self,
+        run_id: str,
+        role: str,
+        *,
+        node_scope: str | None = None,
+        task_label: str = "",
+        model_profile: str | None = None,
+    ) -> None:
+        now = utc_now().isoformat()
+        self.conn.execute(
+            """
+            INSERT OR REPLACE INTO agent_runs(
+                id, role, status, node_scope, task_label, model_profile,
+                started_at, updated_at, ended_at, last_result_summary, error_code, error_message
+            ) VALUES (?, ?, 'running', ?, ?, ?, ?, ?, NULL, NULL, NULL, NULL)
+            """,
+            (run_id, role, node_scope, task_label, model_profile, now, now),
+        )
+        self._append_agent_event(run_id, "RUN_STARTED", task_label or "Run started", {})
+
+    def heartbeat_run(self, run_id: str, summary: str) -> None:
+        self.conn.execute(
+            "UPDATE agent_runs SET updated_at = ?, last_result_summary = ? WHERE id = ?",
+            (utc_now().isoformat(), summary, run_id),
+        )
+        self._append_agent_event(run_id, "RUN_HEARTBEAT", summary, {})
+
+    def complete_run(self, run_id: str, summary: str) -> None:
+        now = utc_now().isoformat()
+        self.conn.execute(
+            """
+            UPDATE agent_runs
+            SET status = 'completed', updated_at = ?, ended_at = ?, last_result_summary = ?
+            WHERE id = ?
+            """,
+            (now, now, summary, run_id),
+        )
+        self._append_agent_event(run_id, "RUN_COMPLETED", summary, {})
+
+    def fail_run(self, run_id: str, code: str, message: str) -> None:
+        now = utc_now().isoformat()
+        self.conn.execute(
+            """
+            UPDATE agent_runs
+            SET status = 'failed', updated_at = ?, ended_at = ?,
+                error_code = ?, error_message = ?, last_result_summary = ?
+            WHERE id = ?
+            """,
+            (now, now, code, message, message, run_id),
+        )
+        self._append_agent_event(run_id, "RUN_FAILED", message, {"code": code})
+
+    def list_active_runs(self) -> list[dict[str, Any]]:
+        rows = self.conn.execute(
+            "SELECT * FROM agent_runs WHERE status = 'running' ORDER BY started_at"
+        ).fetchall()
+        return [dict(row) for row in rows]
+
+    def list_recent_runs(self, limit: int = 10) -> list[dict[str, Any]]:
+        rows = self.conn.execute(
+            """
+            SELECT * FROM agent_runs
+            WHERE status IN ('completed', 'failed', 'FINISHED', 'FAILED', 'CANCELLED')
+            ORDER BY ended_at DESC LIMIT ?
+            """,
+            (limit,),
+        ).fetchall()
+        return [dict(row) for row in rows]
+
+    def get_report_for_run(self, run_id: str) -> ResearchReport | None:
+        row = self.conn.execute(
+            "SELECT * FROM reports WHERE run_id = ? ORDER BY created_at DESC LIMIT 1",
+            (run_id,),
+        ).fetchone()
+        if row is None:
+            return None
+        return ResearchReport(
+            id=row["id"],
+            report_type=row["report_type"],
+            subject_node_id=row["subject_node_id"],
+            status=row["status"],
+            run_id=row["run_id"],
+            payload=json.loads(row["payload_json"]),
+            created_at=row["created_at"],
+        )
+
+    def record_budget_usage(
+        self,
+        run_id: str,
+        budget_name: str,
+        amount: float,
+        detail: str | None = None,
+    ) -> None:
+        self.conn.execute(
+            """
+            INSERT INTO run_budget_usage(run_id, budget_name, amount, detail, created_at)
+            VALUES (?, ?, ?, ?, ?)
+            """,
+            (run_id, budget_name, amount, detail, utc_now().isoformat()),
+        )
+
+    def list_budget_usage(self, run_id: str) -> list[dict[str, Any]]:
+        rows = self.conn.execute(
+            "SELECT budget_name, amount, detail, created_at FROM run_budget_usage WHERE run_id = ?",
+            (run_id,),
+        ).fetchall()
+        return [dict(row) for row in rows]
+
+    def list_stale_runs(self, stale_seconds: int) -> list[dict[str, Any]]:
+        rows = self.conn.execute(
+            """
+            SELECT * FROM agent_runs
+            WHERE status IN ('running', 'RUNNING', 'STARTING', 'QUEUED')
+            ORDER BY updated_at
+            """
+        ).fetchall()
+        now = utc_now()
+        stale: list[dict[str, Any]] = []
+        for row in rows:
+            updated = datetime.fromisoformat(row["updated_at"])
+            if updated.tzinfo is None:
+                updated = updated.replace(tzinfo=UTC)
+            if (now - updated).total_seconds() > stale_seconds:
+                stale.append(dict(row))
+        return stale
+
+    def _append_agent_event(
+        self, run_id: str, event_type: str, summary: str, payload: dict
+    ) -> None:
+        self.conn.execute(
+            """
+            INSERT INTO agent_events(run_id, event_type, summary, payload_json, created_at)
+            VALUES (?, ?, ?, ?, ?)
+            """,
+            (run_id, event_type, summary, json.dumps(payload), utc_now().isoformat()),
+        )
+
+    def get_latest_metric(self, node_id: str, metric_name: str) -> float | None:
+        row = self.conn.execute(
+            """
+            SELECT value FROM metrics
+            WHERE node_id = ? AND metric_name = ?
+            ORDER BY id DESC LIMIT 1
+            """,
+            (node_id, metric_name),
+        ).fetchone()
+        return None if row is None else float(row["value"])
 
     def _row_to_object(self, row: sqlite3.Row) -> ResearchObject:
         prov = json.loads(row["provenance_json"])

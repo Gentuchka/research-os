@@ -9,8 +9,7 @@ from mcp.server.fastmcp import FastMCP
 
 from research_os.acl import ACL
 from research_os.config import RuntimeConfig
-from research_os.factory import build_service
-from research_os.kernel.transaction_service import TransactionService
+from research_os.factory import build_app
 from research_os.kernel.types import (
     AgentRole,
     AppendMetricOp,
@@ -27,23 +26,19 @@ from research_os.kernel.types import (
     canonical_content_hash,
     new_tx_id,
 )
-from research_os.store.repository import Repository
 
 mcp = FastMCP("research-os")
-_config: RuntimeConfig | None = None
-_repo: Repository | None = None
-_service: TransactionService | None = None
-_acl: ACL | None = None
+_app = None
+_acl = None
 
 
-def _bootstrap(config: RuntimeConfig | None = None) -> None:
-    global _config, _repo, _service, _acl
-    if _service is not None:
-        return
-    _config = config or RuntimeConfig.load()
-    _service = build_service(_config)
-    _repo = _service.repo
-    _acl = ACL(_config.roles_config)
+def _bootstrap(config: RuntimeConfig | None = None):
+    global _app, _acl
+    if _app is None:
+        cfg = config or RuntimeConfig.load()
+        _app = build_app(cfg)
+        _acl = ACL(cfg.roles_config)
+    return _app
 
 
 def _ctx(role: str, run_id: str, node_scope: str | None = None) -> RoleContext:
@@ -139,50 +134,112 @@ def _parse_ops(raw_ops: list[dict[str, Any]]) -> list[Any]:
 
 @mcp.tool()
 def get_node(role: str, run_id: str, node_id: str) -> str:
-    """Fetch a research object by ID."""
-    _bootstrap()
-    assert _service is not None
+    app = _bootstrap()
     ctx = _ctx(role, run_id)
     _guard(ctx, "get_node")
-    result = _service.get_node(node_id)
-    return json.dumps(result)
+    return json.dumps(app.tx_service.get_node(node_id))
 
 
 @mcp.tool()
 def find_frontier(role: str, run_id: str, limit: int = 20) -> str:
-    """Return ACTIVE frontier nodes."""
-    _bootstrap()
-    assert _service is not None
+    app = _bootstrap()
     ctx = _ctx(role, run_id)
     _guard(ctx, "find_frontier")
-    return json.dumps(_service.find_frontier(limit))
+    return json.dumps(app.metrics.ranked_frontier(limit))
 
 
 @mcp.tool()
 def graph_statistics(role: str, run_id: str) -> str:
-    """Return graph counts and distributions."""
-    _bootstrap()
-    assert _service is not None
+    app = _bootstrap()
     ctx = _ctx(role, run_id)
     _guard(ctx, "graph_statistics")
-    return json.dumps(_service.graph_statistics())
+    return json.dumps(app.tx_service.graph_statistics())
 
 
 @mcp.tool()
 def history(role: str, run_id: str, node_id: str) -> str:
-    """Return append-only event history for a node."""
-    _bootstrap()
-    assert _service is not None
+    app = _bootstrap()
     ctx = _ctx(role, run_id)
     _guard(ctx, "history")
-    return json.dumps(_service.history(node_id))
+    return json.dumps(app.tx_service.history(node_id))
+
+
+@mcp.tool()
+def submit_report(role: str, run_id: str, report_json: str) -> str:
+    app = _bootstrap()
+    ctx = _ctx(role, run_id)
+    _guard(ctx, "submit_report")
+    report = app.report_intake.submit(ctx, json.loads(report_json))
+    app.activity.project_dashboard(force=True)
+    return json.dumps(report.to_dict())
+
+
+@mcp.tool()
+def get_report(role: str, run_id: str, report_id: str) -> str:
+    app = _bootstrap()
+    ctx = _ctx(role, run_id)
+    _guard(ctx, "get_node")
+    report = app.repo.get_report(report_id)
+    return json.dumps(None if report is None else report.to_dict())
+
+
+@mcp.tool()
+def list_pending_reports(role: str, run_id: str) -> str:
+    app = _bootstrap()
+    ctx = _ctx(role, run_id)
+    _guard(ctx, "find_frontier")
+    return json.dumps([r.to_dict() for r in app.repo.list_pending_reports()])
+
+
+@mcp.tool()
+def review_report(role: str, run_id: str, report_id: str) -> str:
+    app = _bootstrap()
+    ctx = _ctx(role, run_id)
+    _guard(ctx, "apply_transaction")
+    outcome = app.reviewer.review_report(ctx, report_id)
+    return json.dumps(
+        {
+            "decision": outcome.decision,
+            "reason_codes": outcome.reason_codes,
+            "accepted": outcome.apply_result.accepted if outcome.apply_result else False,
+        }
+    )
+
+
+@mcp.tool()
+def compute_metrics(role: str, run_id: str, node_ids_json: str = "[]") -> str:
+    app = _bootstrap()
+    ctx = _ctx(role, run_id)
+    _guard(ctx, "compute_metrics")
+    node_ids = json.loads(node_ids_json)
+    if not node_ids:
+        node_ids = [obj.id for obj in app.repo.list_objects(limit=1000)]
+    app.metrics.recompute(node_ids)
+    app.repo.conn.commit()
+    return json.dumps({"recomputed": node_ids})
+
+
+@mcp.tool()
+def dispatch_worker(role: str, run_id: str, node_id: str = "") -> str:
+    app = _bootstrap()
+    ctx = _ctx(role, run_id)
+    _guard(ctx, "find_frontier")
+    result = app.scheduler.dispatch_next(node_id=node_id or None)
+    return json.dumps(result)
+
+
+@mcp.tool()
+def get_activity(role: str, run_id: str) -> str:
+    app = _bootstrap()
+    ctx = _ctx(role, run_id)
+    _guard(ctx, "graph_statistics")
+    path = app.activity.project_dashboard(force=True)
+    return json.dumps({"path": str(path), "content": path.read_text(encoding="utf-8")})
 
 
 @mcp.tool()
 def apply_transaction(role: str, run_id: str, transaction_json: str) -> str:
-    """Apply a validated transaction (Reviewer/Human only)."""
-    _bootstrap()
-    assert _service is not None
+    app = _bootstrap()
     ctx = _ctx(role, run_id)
     _guard(ctx, "apply_transaction")
     payload = json.loads(transaction_json)
@@ -194,7 +251,8 @@ def apply_transaction(role: str, run_id: str, transaction_json: str) -> str:
         ops=_parse_ops(payload["ops"]),
         created_at=payload.get("created_at", ""),
     )
-    result = _service.apply(ctx, tx)
+    result = app.tx_service.apply(ctx, tx)
+    app.activity.project_dashboard(force=True)
     return json.dumps(
         {
             "tx_id": result.tx_id,
@@ -202,14 +260,13 @@ def apply_transaction(role: str, run_id: str, transaction_json: str) -> str:
             "rejections": result.rejections,
             "affected_node_ids": result.affected_node_ids,
             "git_commit_sha": result.git_commit_sha,
+            "projection_status": result.projection_status,
         }
     )
 
 
-def create_service(config: RuntimeConfig | None = None) -> TransactionService:
-    """Programmatic entrypoint for scripts."""
-    cfg = config or RuntimeConfig.load()
-    return build_service(cfg)
+def create_service(config: RuntimeConfig | None = None):
+    return _bootstrap(config).tx_service
 
 
 def main() -> None:

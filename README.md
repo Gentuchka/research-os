@@ -13,7 +13,7 @@ Persistent research environment for long-term mathematical exploration.
 | Formal verification | Deferred (no Lean/Isabelle in P0–P2) |
 | Logical equivalence | Equivalence classes (see `docs/decisions/002-equivalence-classes.md`) |
 | Human interface | Obsidian vault only |
-| Models | Configurable per role; default GPT 5.6 Sol with selectable reasoning effort |
+| Models | Configurable per role; discovered via Cursor SDK when live workers run |
 | Git | One commit per accepted transaction |
 
 ## Architecture
@@ -28,15 +28,32 @@ See `docs/architecture/` and `docs/decisions/`.
 
 ## Status
 
-**P0 — Kernel** implemented:
+**P0 — Kernel**
 
 - Immutable transaction kernel with invariant enforcement
-- SQLite canonical store and migrations
-- Role-scoped MCP server (`apply_transaction`, `get_node`, `find_frontier`, `graph_statistics`, `history`)
+- SQLite canonical store and versioned migrations
+- Role-scoped MCP server
 - Obsidian vault projection
 - Git commit bridge (enabled in runtime; disabled in tests)
 
-**Deferred to P1+:** Worker/Reviewer/Thinker LLM loops, scheduler, anti-slop semantic checks, metrics engine automation.
+**P1 — Report intake and deterministic Reviewer**
+
+- Immutable worker reports with review decisions
+- `submit_report`, `get_report`, `list_pending_reports`, `review_report` MCP tools
+- Deterministic anti-slop gates (`configs/anti_slop.yaml`)
+- Reviewer adjudication compiles accepted claims into invariant-enforced transactions
+- Readable report/review notes under `vault/03_reports/`
+
+**P2 — Scheduler, Worker runtime, activity panel**
+
+- Job/run/event/budget ledger in SQLite
+- Minimal scheduler (`dispatch_worker`) with fake SDK for offline CI
+- Optional live Cursor SDK worker (`pip install -e ".[sdk]"`, `CURSOR_API_KEY`)
+- Model profile validation via `Cursor.models.list()`
+- Isolated per-run sandbox with fail-closed Cursor hooks (MCP-only)
+- Auto-refreshed human-readable panel at `vault/00_meta/AGENT_ACTIVITY.md`
+
+**Deferred to P3+:** weighted frontier optimization, Thinker global passes, embedding-backed semantic dedup, custom Obsidian plugin.
 
 ## Setup
 
@@ -50,6 +67,16 @@ pip install -e ".[dev]"
 pytest
 ```
 
+For live Cursor SDK workers:
+
+```powershell
+pip install -e ".[dev,sdk]"
+$env:CURSOR_API_KEY = "cursor_..."
+$env:RESEARCH_OS_USE_LIVE_SDK = "1"
+```
+
+Locked dependencies are recorded in `requirements.lock`.
+
 ## MCP server
 
 ```powershell
@@ -62,47 +89,58 @@ Or:
 python -m research_os.mcp_server.server
 ```
 
-Configure Cursor MCP to launch `research-os-mcp` from this repo with `PYTHONPATH=src` if not installed editable.
+Set `RESEARCH_OS_REPO` when launching MCP from a worker sandbox so the server points at the real canonical store.
 
-### Example transaction (Reviewer role)
+### Report flow
 
-Use `apply_transaction` with JSON:
+1. Worker investigates a frontier node and calls `submit_report`.
+2. Reviewer (or human) calls `review_report`.
+3. Deterministic anti-slop gates run before any knowledge-graph mutation.
+4. Accepted claims compile into `apply_transaction` operations.
+5. Vault projection and optional Git commit follow accepted transactions.
+
+### Scheduler dispatch
 
 ```json
-{
-  "summary": "Admit main conjecture",
-  "ops": [
-    {
-      "op_type": "append_node",
-      "object": {
-        "id": "ros_mc_01EXAMPLE",
-        "type": "MainConjecture",
-        "title": "Goldbach",
-        "statement": "Every even integer greater than 2 is the sum of two primes.",
-        "status": "ACTIVE",
-        "created_at": "2026-08-04T00:00:00+00:00",
-        "information_gain": "Establishes the main research target.",
-        "provenance": {
-          "origin_kind": "human_directive",
-          "origin_refs": ["bootstrap"],
-          "created_by_run": "run_human_1"
-        }
-      }
-    }
-  ]
-}
+{"role": "scheduler", "run_id": "run_sched_1", "node_id": "ros_mc_..."}
 ```
+
+via MCP tool `dispatch_worker`. Offline tests use a fake SDK adapter; production can enable the live Cursor SDK with `RESEARCH_OS_USE_LIVE_SDK=1`.
+
+### Agent activity panel
+
+Open `vault/00_meta/AGENT_ACTIVITY.md` in Obsidian. The projection service refreshes it on run state changes and heartbeats. It is prose-only operational state, not mathematical knowledge, and is not committed to Git on every heartbeat.
+
+## Model selection
+
+Edit `configs/models.yaml` to choose Worker / Reviewer / Thinker profiles. Before a live worker launch, Research OS validates the configured model id against `Cursor.models.list()` and records the resolved profile in the run ledger.
 
 ## Layout
 
 - `docs/` — architecture and ADRs
 - `schemas/` — JSON schemas for objects, edges, events, reports
-- `configs/` — roles, models, frontier, budgets, anti-slop
-- `src/research_os/` — kernel, store, MCP, projection, git bridge
+- `configs/` — roles, models, frontier, budgets, anti-slop, activity
+- `src/research_os/` — kernel, store, MCP, projection, scheduler, agents
 - `vault/` — Obsidian projection (generated; do not hand-edit)
 - `data/canonical/` — SQLite database (not committed)
-- `tests/` — invariant and end-to-end tests
+- `tests/` — invariant, reviewer, scheduler, migration, and activity tests
 
-## Model selection
+## Testing
 
-Edit `configs/models.yaml` to switch Worker / Reviewer / Thinker profiles (`gpt56_sol_medium`, `gpt56_sol_high`, `gpt56_sol_max`).
+```powershell
+pytest -q
+ruff check src tests
+```
+
+Optional live SDK smoke test (requires network + API key):
+
+```powershell
+$env:RESEARCH_OS_LIVE_SDK_TEST = "1"
+pytest tests/test_live_sdk.py -q
+```
+
+## Operational recovery
+
+- **Projection/Git failed after accepted DB commit:** inspect `transactions.projection_status` and replay projection from the accepted transaction payload.
+- **Stale worker:** check `AGENT_ACTIVITY.md` Problems section and `agent_runs` / `agent_events` tables.
+- **Rejected report:** see `vault/03_reports/` and `data/rejections/` for reason codes.

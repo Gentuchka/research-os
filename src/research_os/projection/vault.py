@@ -54,6 +54,40 @@ class VaultProjector:
         path.write_text("\n".join(lines) + "\n", encoding="utf-8")
         return path
 
+    def project_report(self, report, decision) -> Path:
+        out_dir = self.vault_dir / "03_reports"
+        out_dir.mkdir(parents=True, exist_ok=True)
+        path = out_dir / f"{report.id}.md"
+        lines = [
+            "---",
+            f"ros_id: {report.id}",
+            "type: Report",
+            f"status: {report.status}",
+            f"decision: {decision.decision}",
+            f"subject: {report.subject_node_id}",
+            "---",
+            "",
+            f"# Report {report.id}",
+            "",
+            "## Summary",
+            report.payload.get("summary", "_No summary provided._"),
+            "",
+            "## Information gained",
+        ]
+        for item in report.payload.get("information_delta", []):
+            lines.append(f"- {item}")
+        lines.extend(["", "## Claims"])
+        for claim in report.payload.get("claims", []):
+            tag = " (speculative)" if claim.get("speculative") else ""
+            lines.append(f"- {claim.get('text', '')}{tag}")
+        if decision.reason_codes:
+            lines.extend(["", "## Review outcome"])
+            for code in decision.reason_codes:
+                lines.append(f"- {code}")
+        lines.append("")
+        path.write_text("\n".join(lines), encoding="utf-8")
+        return path
+
     def _write_object_note(self, obj: ResearchObject) -> Path:
         rel_dir = TYPE_DIRS.get(obj.type, "02_objects/Other")
         out_dir = self.vault_dir / rel_dir

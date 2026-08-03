@@ -2,38 +2,39 @@
 
 from __future__ import annotations
 
+import json
 import shutil
 from pathlib import Path
 
 import pytest
 
 from research_os.config import RuntimeConfig
-from research_os.factory import build_service
+from research_os.factory import build_app
 from research_os.kernel.builders import build_object
-from research_os.kernel.transaction_service import TransactionService
-from research_os.kernel.types import (
-    AgentRole,
-    AppendNodeOp,
-    RoleContext,
-    Transaction,
-    new_tx_id,
-)
+from research_os.kernel.types import AgentRole, AppendNodeOp, RoleContext, Transaction, new_tx_id
 
 
 @pytest.fixture
 def runtime(tmp_path: Path) -> RuntimeConfig:
     repo = tmp_path / "repo"
-    shutil.copytree(Path(__file__).resolve().parents[1] / "configs", repo / "configs")
-    shutil.copytree(Path(__file__).resolve().parents[1] / "schemas", repo / "schemas")
-    shutil.copytree(Path(__file__).resolve().parents[1] / "vault", repo / "vault")
+    root = Path(__file__).resolve().parents[1]
+    shutil.copytree(root / "configs", repo / "configs")
+    shutil.copytree(root / "schemas", repo / "schemas")
+    shutil.copytree(root / "vault", repo / "vault")
     (repo / "data" / "canonical").mkdir(parents=True)
     (repo / "data" / "transactions").mkdir(parents=True)
+    (repo / "data" / "rejections").mkdir(parents=True)
     return RuntimeConfig.load(repo, git_commit_enabled=False)
 
 
 @pytest.fixture
-def service(runtime: RuntimeConfig) -> TransactionService:
-    return build_service(runtime)
+def app(runtime: RuntimeConfig):
+    return build_app(runtime)
+
+
+@pytest.fixture
+def service(app):
+    return app.tx_service
 
 
 @pytest.fixture
@@ -46,7 +47,7 @@ def worker_ctx() -> RoleContext:
     return RoleContext(role=AgentRole.WORKER, run_id="run_worker")
 
 
-def admit_main(service: TransactionService, ctx: RoleContext) -> str:
+def admit_main(service, ctx: RoleContext) -> str:
     obj = build_object(
         object_type="MainConjecture",
         title="Goldbach",
@@ -66,3 +67,9 @@ def admit_main(service: TransactionService, ctx: RoleContext) -> str:
     result = service.apply(ctx, tx)
     assert result.accepted, result.rejections
     return obj.id
+
+
+def load_report_fixture(name: str) -> dict:
+    path = Path(__file__).resolve().parent / "fixtures" / "reports" / name
+    with path.open(encoding="utf-8") as fh:
+        return json.load(fh)

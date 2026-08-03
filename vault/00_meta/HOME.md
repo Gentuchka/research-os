@@ -7,7 +7,9 @@ This vault is **generated** by the projection layer. Do not edit object notes by
 - [[FRONTIER]] — current research frontier
 - [[STATISTICS]] — graph statistics
 - [[INVARIANTS]] — system invariants
+- [[AGENT_ACTIVITY]] — live agent activity panel
 - `02_objects/` — all research objects by type
+- `03_reports/` — worker reports and review decisions
 
 ## Human actions
 

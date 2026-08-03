@@ -27,6 +27,14 @@ OPINION_METRICS = {
     "promise",
     "information_gain",
 }
+PROV_EDGE_TYPES = {
+    "prov:produced",
+    "prov:inspired",
+    "prov:supported_by",
+    "prov:from_literature",
+    "prov:human_injected",
+    "prov:member_of_class",
+}
 
 
 class InvariantEngine:
@@ -42,6 +50,23 @@ class InvariantEngine:
         pending_ids = {
             op.object.id for op in tx.ops if isinstance(op, AppendNodeOp)
         }
+        if len(pending_ids) != sum(
+            1 for op in tx.ops if isinstance(op, AppendNodeOp)
+        ):
+            raise KernelError(
+                InvariantCode.DUPLICATE_CONTENT,
+                "Duplicate node IDs within transaction",
+            )
+        seen_links: set[tuple[str, str, str, str]] = set()
+        for op in tx.ops:
+            if isinstance(op, CreateLinkOp):
+                key = (op.from_id, op.to_id, op.edge_type, op.graph)
+                if key in seen_links:
+                    raise KernelError(
+                        InvariantCode.INVALID_OPERATION,
+                        f"Duplicate link in transaction: {key}",
+                    )
+                seen_links.add(key)
         for op in tx.ops:
             self._validate_op(op, pending_ids=pending_ids)
         self._validate_cycle_after_ops(tx.ops)
@@ -98,6 +123,8 @@ class InvariantEngine:
     def _validate_link(self, op: CreateLinkOp, pending_ids: set[str]) -> None:
         self._require_exists(op.from_id, pending_ids)
         self._require_exists(op.to_id, pending_ids)
+        if op.from_id == op.to_id:
+            raise KernelError(InvariantCode.INV_CYCLE, "Self-link is not allowed")
         if op.graph == "math":
             allowed = {
                 "strengthens",
@@ -122,7 +149,7 @@ class InvariantEngine:
                     f"Invalid math edge type: {op.edge_type}",
                 )
         else:
-            if not op.edge_type.startswith("prov:"):
+            if op.edge_type not in PROV_EDGE_TYPES:
                 raise KernelError(
                     InvariantCode.INV_UNTYPED_EDGE,
                     f"Invalid provenance edge type: {op.edge_type}",
@@ -135,9 +162,16 @@ class InvariantEngine:
                 InvariantCode.INV_UNSUPPORTED_CLAIM,
                 f"Status {op.status} requires evidence_refs",
             )
+        for ref in op.evidence_refs:
+            self._require_exists(ref, pending_ids)
 
     def _validate_metric(self, op: AppendMetricOp, pending_ids: set[str]) -> None:
         self._require_exists(op.node_id, pending_ids)
+        if not 0.0 <= op.value <= 1.0:
+            raise KernelError(
+                InvariantCode.INV_FACT_OPINION_MIX,
+                f"Metric value out of range: {op.value}",
+            )
         if op.metric_name not in OPINION_METRICS:
             raise KernelError(
                 InvariantCode.INV_FACT_OPINION_MIX,

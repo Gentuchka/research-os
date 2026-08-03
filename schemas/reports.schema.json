@@ -1,0 +1,73 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://research-os.local/schemas/reports.schema.json",
+  "title": "ResearchReport",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "report_type",
+    "subject_node_id",
+    "information_delta",
+    "claims"
+  ],
+  "properties": {
+    "report_type": {
+      "type": "string",
+      "enum": ["worker", "thinker", "human"]
+    },
+    "subject_node_id": { "type": "string" },
+    "summary": { "type": "string" },
+    "information_delta": {
+      "type": "array",
+      "items": { "type": "string" },
+      "minItems": 1
+    },
+    "claims": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["text"],
+        "properties": {
+          "text": { "type": "string" },
+          "speculative": { "type": "boolean" },
+          "evidence_refs": {
+            "type": "array",
+            "items": { "type": "string" }
+          }
+        }
+      }
+    },
+    "proposed_objects": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["type", "title", "statement", "information_gain"],
+        "properties": {
+          "type": { "type": "string" },
+          "title": { "type": "string" },
+          "statement": { "type": "string" },
+          "information_gain": { "type": "string" }
+        }
+      }
+    },
+    "proposed_links": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["from_id", "to_id", "edge_type"],
+        "properties": {
+          "from_id": { "type": "string" },
+          "to_id": { "type": "string" },
+          "edge_type": { "type": "string" },
+          "graph": { "type": "string", "enum": ["math", "provenance"] }
+        }
+      }
+    },
+    "literature_refs": {
+      "type": "array",
+      "items": { "type": "string" }
+    },
+    "estimated_difficulty": { "type": "number" },
+    "confidence": { "type": "number" }
+  }
+}
