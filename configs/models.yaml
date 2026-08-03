@@ -1,0 +1,37 @@
+# Model profiles — edit to choose provider, model, and reasoning effort per role.
+# Run ledger records the active profile name for each job.
+
+profiles:
+  gpt56_sol_medium:
+    provider: openai
+    model: gpt-5.6-sol-medium
+    reasoning_effort: medium
+    temperature: 0.2
+
+  gpt56_sol_high:
+    provider: openai
+    model: gpt-5.6-sol-medium
+    reasoning_effort: high
+    temperature: 0.2
+
+  gpt56_sol_max:
+    provider: openai
+    model: gpt-5.6-sol-medium
+    reasoning_effort: max
+    temperature: 0.1
+
+# Active profile per agent role — change these to switch models
+roles:
+  worker:
+    profile: gpt56_sol_high
+  reviewer:
+    llm:
+      enabled: true
+      profile: gpt56_sol_max
+    deterministic_checks: true
+  thinker:
+    profile: gpt56_sol_max
+
+# Override for a single run (optional; scheduler reads if set)
+run_override:
+  profile: null

@@ -1,0 +1,67 @@
+version: 1
+
+roles:
+  worker:
+    tools:
+      - get_node
+      - get_subgraph
+      - nearest_main
+      - search_by_definition
+      - search_by_lemma
+      - search_counterexamples
+      - search_techniques
+      - semantic_search
+      - find_similar
+      - history
+      - submit_report
+      - consume_budget
+    deny:
+      - create_node
+      - archive_node
+      - supersede_node
+      - create_link
+      - apply_transaction
+      - update_frontier
+      - merge_equivalence_class
+
+  reviewer:
+    tools: all
+    deny: []
+
+  thinker:
+    tools:
+      - get_node
+      - get_subgraph
+      - graph_statistics
+      - find_frontier
+      - nearest_main
+      - find_dead_nodes
+      - find_orphans
+      - find_duplicate
+      - semantic_search
+      - history
+      - timeline
+      - submit_report
+    deny:
+      - apply_transaction
+      - create_node
+      - archive_node
+      - supersede_node
+      - create_link
+      - merge_equivalence_class
+
+  scheduler:
+    tools:
+      - find_frontier
+      - compute_metrics
+      - update_frontier
+      - consume_budget
+      - get_node
+      - graph_statistics
+    deny:
+      - apply_transaction
+      - submit_report
+
+  human:
+    tools: all
+    deny: []
