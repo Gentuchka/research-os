@@ -1,14 +1,15 @@
 {
   "report_type": "worker",
   "subject_node_id": "PLACEHOLDER",
-  "summary": "Low information",
-  "information_delta": ["maybe", "hmm"],
+  "summary": "Needs human",
+  "information_delta": ["Escalated ambiguity requires operator review"],
   "claims": [
     {
-      "text": "Something might be true.",
+      "text": "The main conjecture may need a new axiom.",
       "speculative": true
     }
   ],
+  "needs_human": true,
   "proposed_objects": [],
   "proposed_links": [],
   "literature_refs": []

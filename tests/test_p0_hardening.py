@@ -43,6 +43,23 @@ def test_rejects_self_link(service, reviewer_ctx):
     assert result.rejections[0]["code"] == InvariantCode.INV_CYCLE.value
 
 
+def test_p0_rollback_leaves_graph_unchanged(service, reviewer_ctx):
+    admit_main(service, reviewer_ctx)
+    after_admit = service.graph_statistics()["object_count"]
+    result = service.apply(
+        reviewer_ctx,
+        Transaction(
+            id=new_tx_id(),
+            actor_role="reviewer",
+            actor_run_id=reviewer_ctx.run_id,
+            summary="bad link",
+            ops=[CreateLinkOp(from_id="ros_missing", to_id="ros_missing2", edge_type="depends_on")],
+        ),
+    )
+    assert not result.accepted
+    assert service.graph_statistics()["object_count"] == after_admit
+
+
 def test_status_requires_existing_evidence(service, reviewer_ctx):
     main_id = admit_main(service, reviewer_ctx)
     tx = Transaction(

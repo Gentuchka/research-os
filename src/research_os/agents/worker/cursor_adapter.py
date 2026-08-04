@@ -56,7 +56,9 @@ class CursorSdkWorker:
             self.repo.record_budget_usage(ctx.run_id, "model_profile", 1.0, resolved.profile_name)
             self.repo.conn.commit()
             with Agent.create(
-                model=resolved.model_id,
+                model={"id": resolved.model_id, "reasoning_effort": resolved.reasoning_effort}
+                if resolved.reasoning_effort
+                else resolved.model_id,
                 api_key=api_key,
                 local=LocalAgentOptions(cwd=str(sandbox), setting_sources=[]),
                 mcp_servers={
@@ -70,13 +72,21 @@ class CursorSdkWorker:
                 run = agent.send(prompt)
                 self.repo.heartbeat_run(ctx.run_id, f"SDK run {run.id} in progress")
                 self.repo.conn.commit()
+                for message in run.messages():
+                    if message.type == "assistant":
+                        self.repo.heartbeat_run(ctx.run_id, "Assistant produced output")
+                        self.repo.conn.commit()
                 result = run.wait()
                 if result.status == "error":
+                    self.repo.fail_run(ctx.run_id, "SDK_RUN", f"Cursor SDK run failed: {result.id}")
+                    self.repo.conn.commit()
                     raise RuntimeError(f"Cursor SDK run failed: {result.id}")
             existing = self.repo.get_report_for_run(ctx.run_id)
             if existing is not None:
                 return existing
-            return self._fallback_submit(ctx, subject_node_id, result)
+            raise RuntimeError(
+                "Live worker must submit a report via MCP submit_report; no fallback allowed"
+            )
         except CursorAgentError as exc:
             self.repo.fail_run(ctx.run_id, "SDK_STARTUP", str(exc))
             self.repo.conn.commit()

@@ -18,9 +18,11 @@ from research_os.kernel.types import (
     ResearchObject,
     SetStatusOp,
     SupersedeNodeOp,
+    canonical_content_hash,
     utc_now,
 )
 from research_os.reports.types import ReportStatus, ResearchReport, ReviewDecision
+from research_os.store.run_lifecycle import ACTIVE_RUN_STATUSES, TERMINAL_RUN_STATUSES, RunStatus
 
 
 class Repository:
@@ -391,11 +393,13 @@ class Repository:
         return {row["id"] for row in rows}
 
     def save_report(self, report: ResearchReport) -> None:
+        fingerprint = self._report_fingerprint(report.payload)
         self.conn.execute(
             """
             INSERT INTO reports(
-                id, report_type, subject_node_id, status, run_id, payload_json, created_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?)
+                id, report_type, subject_node_id, status, run_id, payload_json,
+                created_at, content_fingerprint
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 report.id,
@@ -405,13 +409,117 @@ class Repository:
                 report.run_id,
                 json.dumps(report.payload),
                 report.created_at,
+                fingerprint,
             ),
         )
+        self.save_report_entities(report)
 
-    def get_report(self, report_id: str) -> ResearchReport | None:
-        row = self.conn.execute("SELECT * FROM reports WHERE id = ?", (report_id,)).fetchone()
+    def save_report_entities(self, report: ResearchReport) -> None:
+        now = utc_now().isoformat()
+        payload = report.payload
+        for idx, claim in enumerate(payload.get("claims", [])):
+            self.conn.execute(
+                """
+                INSERT INTO report_claims(
+                    report_id, claim_index, text, speculative, evidence_refs_json, created_at
+                ) VALUES (?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    report.id,
+                    idx,
+                    claim.get("text", ""),
+                    int(bool(claim.get("speculative"))),
+                    json.dumps(claim.get("evidence_refs", [])),
+                    now,
+                ),
+            )
+        for ref in payload.get("literature_refs", []):
+            self.conn.execute(
+                "INSERT INTO citations(report_id, ref, created_at) VALUES (?, ?, ?)",
+                (report.id, ref, now),
+            )
+        op_index = 0
+        for proposed in payload.get("proposed_objects", []):
+            self.conn.execute(
+                """
+                INSERT INTO candidate_operations(
+                    report_id, op_index, op_type, payload_json, created_at
+                ) VALUES (?, ?, ?, ?, ?)
+                """,
+                (
+                    report.id,
+                    op_index,
+                    "append_node",
+                    json.dumps(proposed),
+                    now,
+                ),
+            )
+            op_index += 1
+        for link in payload.get("proposed_links", []):
+            self.conn.execute(
+                """
+                INSERT INTO candidate_operations(
+                    report_id, op_index, op_type, payload_json, created_at
+                ) VALUES (?, ?, ?, ?, ?)
+                """,
+                (
+                    report.id,
+                    op_index,
+                    "create_link",
+                    json.dumps(link),
+                    now,
+                ),
+            )
+            op_index += 1
+
+    def get_report_by_fingerprint(self, fingerprint: str) -> ResearchReport | None:
+        row = self.conn.execute(
+            "SELECT * FROM reports WHERE content_fingerprint = ? ORDER BY created_at DESC LIMIT 1",
+            (fingerprint,),
+        ).fetchone()
         if row is None:
             return None
+        return self._row_to_report(row)
+
+    def has_review_decision(self, report_id: str) -> bool:
+        row = self.conn.execute(
+            "SELECT 1 FROM review_decisions WHERE report_id = ? LIMIT 1",
+            (report_id,),
+        ).fetchone()
+        return row is not None
+
+    def get_latest_decision(self, report_id: str) -> ReviewDecision | None:
+        row = self.conn.execute(
+            """
+            SELECT * FROM review_decisions
+            WHERE report_id = ?
+            ORDER BY created_at DESC LIMIT 1
+            """,
+            (report_id,),
+        ).fetchone()
+        if row is None:
+            return None
+        return self._row_to_decision(row)
+
+    def close_review_queue(self, report_id: str, reviewer_run_id: str) -> None:
+        self.conn.execute(
+            """
+            UPDATE review_queue
+            SET status = 'decided', reviewer_run_id = ?, decided_at = ?
+            WHERE report_id = ? AND status = 'pending'
+            """,
+            (reviewer_run_id, utc_now().isoformat(), report_id),
+        )
+
+    def _report_fingerprint(self, payload: dict[str, Any]) -> str:
+        normalized = {
+            "subject_node_id": payload["subject_node_id"],
+            "information_delta": sorted(payload.get("information_delta", [])),
+            "claims": [c.get("text", "") for c in payload.get("claims", [])],
+        }
+        return canonical_content_hash(normalized)
+
+    def _row_to_report(self, row: sqlite3.Row) -> ResearchReport:
         return ResearchReport(
             id=row["id"],
             report_type=row["report_type"],
@@ -422,21 +530,37 @@ class Repository:
             created_at=row["created_at"],
         )
 
+    def _row_to_decision(self, row: sqlite3.Row) -> ReviewDecision:
+        keys = row.keys()
+        return ReviewDecision(
+            id=row["id"],
+            report_id=row["report_id"],
+            decision=row["decision"],
+            reason_codes=json.loads(row["reason_codes_json"]),
+            reviewer_run_id=row["reviewer_run_id"],
+            transaction_id=row["transaction_id"],
+            created_at=row["created_at"],
+            accepted_claim_indices=json.loads(row["accepted_claim_indices_json"])
+            if "accepted_claim_indices_json" in keys and row["accepted_claim_indices_json"]
+            else [],
+            rejected_claim_indices=json.loads(row["rejected_claim_indices_json"])
+            if "rejected_claim_indices_json" in keys and row["rejected_claim_indices_json"]
+            else [],
+        )
+
+    def get_report(self, report_id: str) -> ResearchReport | None:
+        row = self.conn.execute("SELECT * FROM reports WHERE id = ?", (report_id,)).fetchone()
+        if row is None:
+            return None
+        return self._row_to_report(row)
+
     def list_reports_for_node(self, node_id: str) -> list[ResearchReport]:
         rows = self.conn.execute(
             "SELECT * FROM reports WHERE subject_node_id = ? ORDER BY created_at",
             (node_id,),
         ).fetchall()
         return [
-            ResearchReport(
-                id=row["id"],
-                report_type=row["report_type"],
-                subject_node_id=row["subject_node_id"],
-                status=row["status"],
-                run_id=row["run_id"],
-                payload=json.loads(row["payload_json"]),
-                created_at=row["created_at"],
-            )
+            self._row_to_report(row)
             for row in rows
         ]
 
@@ -445,18 +569,7 @@ class Repository:
             "SELECT * FROM reports WHERE status = ? ORDER BY created_at",
             (ReportStatus.PENDING.value,),
         ).fetchall()
-        return [
-            ResearchReport(
-                id=row["id"],
-                report_type=row["report_type"],
-                subject_node_id=row["subject_node_id"],
-                status=row["status"],
-                run_id=row["run_id"],
-                payload=json.loads(row["payload_json"]),
-                created_at=row["created_at"],
-            )
-            for row in rows
-        ]
+        return [self._row_to_report(row) for row in rows]
 
     def update_report_status(self, report_id: str, status: str) -> None:
         self.conn.execute("UPDATE reports SET status = ? WHERE id = ?", (status, report_id))
@@ -478,8 +591,9 @@ class Repository:
             """
             INSERT INTO review_decisions(
                 id, report_id, decision, reason_codes_json, reviewer_run_id,
-                transaction_id, created_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?)
+                transaction_id, created_at, accepted_claim_indices_json,
+                rejected_claim_indices_json
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 decision.id,
@@ -489,6 +603,8 @@ class Repository:
                 decision.reviewer_run_id,
                 decision.transaction_id,
                 decision.created_at,
+                json.dumps(decision.accepted_claim_indices),
+                json.dumps(decision.rejected_claim_indices),
             ),
         )
 
@@ -498,6 +614,77 @@ class Repository:
         ).fetchall()
         return [dict(row) for row in rows]
 
+    def create_job(self, job_id: str, node_id: str, *, priority: float = 0.0) -> None:
+        now = utc_now().isoformat()
+        self.conn.execute(
+            """
+            INSERT INTO jobs(id, node_id, status, priority, assigned_run_id, created_at, updated_at)
+            VALUES (?, ?, ?, ?, NULL, ?, ?)
+            """,
+            (job_id, node_id, RunStatus.QUEUED.value, priority, now, now),
+        )
+
+    def update_job_status(
+        self,
+        job_id: str,
+        status: str,
+        *,
+        assigned_run_id: str | None = None,
+    ) -> None:
+        now = utc_now().isoformat()
+        self.conn.execute(
+            """
+            UPDATE jobs
+            SET status = ?, assigned_run_id = COALESCE(?, assigned_run_id), updated_at = ?
+            WHERE id = ?
+            """,
+            (status, assigned_run_id, now, job_id),
+        )
+
+    def list_blocked_jobs(self) -> list[dict[str, Any]]:
+        rows = self.conn.execute(
+            """
+            SELECT * FROM jobs
+            WHERE status IN ('FAILED', 'WAITING_FOR_REVIEW', 'CANCELLED')
+            ORDER BY updated_at DESC
+            """
+        ).fetchall()
+        return [dict(row) for row in rows]
+
+    def consume_node_budget(self, node_id: str, budget_name: str, amount: float) -> float:
+        defaults = {
+            "attempt": "attempt_budget",
+            "token": "token_budget",
+            "time": "time_budget_seconds",
+            "tool": "tool_budget",
+            "branch": "branch_budget",
+        }
+        column = defaults.get(budget_name, f"{budget_name}_budget")
+        used_column = column.replace("_budget", "_used").replace("_seconds", "_seconds")
+        if budget_name == "time":
+            used_column = "time_used_seconds"
+        row = self.conn.execute("SELECT * FROM budgets WHERE node_id = ?", (node_id,)).fetchone()
+        if row is None:
+            self.conn.execute(
+                """
+                INSERT INTO budgets(
+                    node_id, attempt_budget, token_budget, time_budget_seconds,
+                    tool_budget, branch_budget
+                ) VALUES (?, 8, 200000, 3600, 50, 3)
+                """,
+                (node_id,),
+            )
+            row = self.conn.execute(
+                "SELECT * FROM budgets WHERE node_id = ?", (node_id,)
+            ).fetchone()
+        current_used = float(row[used_column])
+        self.conn.execute(
+            f"UPDATE budgets SET {used_column} = ? WHERE node_id = ?",
+            (current_used + amount, node_id),
+        )
+        limit = float(row[column])
+        return limit - (current_used + amount)
+
     def start_run(
         self,
         run_id: str,
@@ -506,18 +693,46 @@ class Repository:
         node_scope: str | None = None,
         task_label: str = "",
         model_profile: str | None = None,
+        reasoning_effort: str | None = None,
+        resolved_model_id: str | None = None,
+        status: str = RunStatus.RUNNING.value,
     ) -> None:
         now = utc_now().isoformat()
         self.conn.execute(
             """
             INSERT OR REPLACE INTO agent_runs(
                 id, role, status, node_scope, task_label, model_profile,
-                started_at, updated_at, ended_at, last_result_summary, error_code, error_message
-            ) VALUES (?, ?, 'running', ?, ?, ?, ?, ?, NULL, NULL, NULL, NULL)
+                reasoning_effort, resolved_model_id,
+                started_at, updated_at, ended_at, last_result_summary,
+                error_code, error_message
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL, NULL, NULL)
             """,
-            (run_id, role, node_scope, task_label, model_profile, now, now),
+            (
+                run_id,
+                role,
+                status,
+                node_scope,
+                task_label,
+                model_profile,
+                reasoning_effort,
+                resolved_model_id,
+                now,
+                now,
+            ),
         )
         self._append_agent_event(run_id, "RUN_STARTED", task_label or "Run started", {})
+
+    def transition_run(self, run_id: str, status: str, summary: str | None = None) -> None:
+        now = utc_now().isoformat()
+        self.conn.execute(
+            """
+            UPDATE agent_runs
+            SET status = ?, updated_at = ?, last_result_summary = COALESCE(?, last_result_summary)
+            WHERE id = ?
+            """,
+            (status, now, summary, run_id),
+        )
+        self._append_agent_event(run_id, "RUN_STATE", summary or status, {"status": status})
 
     def heartbeat_run(self, run_id: str, summary: str) -> None:
         self.conn.execute(
@@ -531,10 +746,10 @@ class Repository:
         self.conn.execute(
             """
             UPDATE agent_runs
-            SET status = 'completed', updated_at = ?, ended_at = ?, last_result_summary = ?
+            SET status = ?, updated_at = ?, ended_at = ?, last_result_summary = ?
             WHERE id = ?
             """,
-            (now, now, summary, run_id),
+            (RunStatus.FINISHED.value, now, now, summary, run_id),
         )
         self._append_agent_event(run_id, "RUN_COMPLETED", summary, {})
 
@@ -543,28 +758,47 @@ class Repository:
         self.conn.execute(
             """
             UPDATE agent_runs
-            SET status = 'failed', updated_at = ?, ended_at = ?,
+            SET status = ?, updated_at = ?, ended_at = ?,
                 error_code = ?, error_message = ?, last_result_summary = ?
             WHERE id = ?
             """,
-            (now, now, code, message, message, run_id),
+            (RunStatus.FAILED.value, now, now, code, message, message, run_id),
         )
         self._append_agent_event(run_id, "RUN_FAILED", message, {"code": code})
 
+    def cancel_run(self, run_id: str, reason: str = "cancelled") -> None:
+        now = utc_now().isoformat()
+        self.conn.execute(
+            """
+            UPDATE agent_runs
+            SET status = ?, updated_at = ?, ended_at = ?, last_result_summary = ?
+            WHERE id = ?
+            """,
+            (RunStatus.CANCELLED.value, now, now, reason, run_id),
+        )
+        self._append_agent_event(run_id, "RUN_CANCELLED", reason, {})
+
     def list_active_runs(self) -> list[dict[str, Any]]:
+        placeholders = ",".join("?" for _ in ACTIVE_RUN_STATUSES)
         rows = self.conn.execute(
-            "SELECT * FROM agent_runs WHERE status = 'running' ORDER BY started_at"
+            f"""
+            SELECT * FROM agent_runs
+            WHERE status IN ({placeholders})
+            ORDER BY started_at
+            """,
+            tuple(ACTIVE_RUN_STATUSES),
         ).fetchall()
         return [dict(row) for row in rows]
 
     def list_recent_runs(self, limit: int = 10) -> list[dict[str, Any]]:
+        placeholders = ",".join("?" for _ in TERMINAL_RUN_STATUSES)
         rows = self.conn.execute(
-            """
+            f"""
             SELECT * FROM agent_runs
-            WHERE status IN ('completed', 'failed', 'FINISHED', 'FAILED', 'CANCELLED')
+            WHERE status IN ({placeholders})
             ORDER BY ended_at DESC LIMIT ?
             """,
-            (limit,),
+            (*TERMINAL_RUN_STATUSES, limit),
         ).fetchall()
         return [dict(row) for row in rows]
 
@@ -575,15 +809,18 @@ class Repository:
         ).fetchone()
         if row is None:
             return None
-        return ResearchReport(
-            id=row["id"],
-            report_type=row["report_type"],
-            subject_node_id=row["subject_node_id"],
-            status=row["status"],
-            run_id=row["run_id"],
-            payload=json.loads(row["payload_json"]),
-            created_at=row["created_at"],
-        )
+        return self._row_to_report(row)
+
+    def get_accepted_transaction_for_report(self, report_id: str) -> str | None:
+        row = self.conn.execute(
+            """
+            SELECT transaction_id FROM review_decisions
+            WHERE report_id = ? AND transaction_id IS NOT NULL
+            ORDER BY created_at DESC LIMIT 1
+            """,
+            (report_id,),
+        ).fetchone()
+        return None if row is None else row["transaction_id"]
 
     def record_budget_usage(
         self,
@@ -608,12 +845,14 @@ class Repository:
         return [dict(row) for row in rows]
 
     def list_stale_runs(self, stale_seconds: int) -> list[dict[str, Any]]:
+        placeholders = ",".join("?" for _ in ACTIVE_RUN_STATUSES)
         rows = self.conn.execute(
-            """
+            f"""
             SELECT * FROM agent_runs
-            WHERE status IN ('running', 'RUNNING', 'STARTING', 'QUEUED')
+            WHERE status IN ({placeholders})
             ORDER BY updated_at
-            """
+            """,
+            tuple(ACTIVE_RUN_STATUSES),
         ).fetchall()
         now = utc_now()
         stale: list[dict[str, Any]] = []

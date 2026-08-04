@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import json
 from typing import Any
 
 from mcp.server.fastmcp import FastMCP
@@ -10,21 +9,14 @@ from mcp.server.fastmcp import FastMCP
 from research_os.acl import ACL
 from research_os.config import RuntimeConfig
 from research_os.factory import build_app
-from research_os.kernel.types import (
-    AgentRole,
-    AppendMetricOp,
-    AppendNodeOp,
-    ArchiveNodeOp,
-    CreateLinkOp,
-    MergeEquivalenceClassOp,
-    Provenance,
-    ResearchObject,
-    RoleContext,
-    SetStatusOp,
-    SupersedeNodeOp,
-    Transaction,
-    canonical_content_hash,
-    new_tx_id,
+from research_os.kernel.serialization import parse_ops
+from research_os.kernel.types import AgentRole, RoleContext, Transaction, new_tx_id
+from research_os.mcp_server.models import (
+    ActivityResult,
+    ApplyTransactionResult,
+    ConsumeBudgetResult,
+    DispatchWorkerResult,
+    ReviewReportResult,
 )
 
 mcp = FastMCP("research-os")
@@ -50,218 +42,178 @@ def _guard(ctx: RoleContext, tool_name: str) -> None:
     _acl.assert_tool(ctx, tool_name)
 
 
-def _parse_object(data: dict[str, Any]) -> ResearchObject:
-    prov = data["provenance"]
-    payload = {
-        "type": data["type"],
-        "title": data["title"],
-        "statement": data["statement"],
-        "formalization": data.get("formalization"),
-    }
-    return ResearchObject(
-        id=data["id"],
-        type=data["type"],
-        title=data["title"],
-        statement=data["statement"],
-        formalization=data.get("formalization"),
-        status=data.get("status", "ACTIVE"),
-        created_at=data["created_at"],
-        admitted_at=data.get("admitted_at"),
-        content_hash=data.get("content_hash") or canonical_content_hash(payload),
-        provenance=Provenance(
-            origin_kind=prov["origin_kind"],
-            origin_refs=prov["origin_refs"],
-            created_by_run=prov["created_by_run"],
-        ),
-        evidence_refs=data.get("evidence_refs", []),
-        tags=data.get("tags", []),
-        information_gain=data.get("information_gain"),
-    )
-
-
-def _parse_ops(raw_ops: list[dict[str, Any]]) -> list[Any]:
-    parsed: list[Any] = []
-    for raw in raw_ops:
-        op_type = raw["op_type"]
-        if op_type == "append_node":
-            parsed.append(AppendNodeOp(object=_parse_object(raw["object"])))
-        elif op_type == "archive_node":
-            parsed.append(ArchiveNodeOp(node_id=raw["node_id"], reason=raw["reason"]))
-        elif op_type == "supersede_node":
-            parsed.append(
-                SupersedeNodeOp(old_id=raw["old_id"], new_id=raw["new_id"], reason=raw["reason"])
-            )
-        elif op_type == "create_link":
-            parsed.append(
-                CreateLinkOp(
-                    from_id=raw["from_id"],
-                    to_id=raw["to_id"],
-                    edge_type=raw["edge_type"],
-                    graph=raw.get("graph", "math"),
-                )
-            )
-        elif op_type == "merge_equivalence_class":
-            parsed.append(
-                MergeEquivalenceClassOp(
-                    representative_id=raw["representative_id"],
-                    member_id=raw["member_id"],
-                    class_id=raw.get("class_id"),
-                )
-            )
-        elif op_type == "set_status":
-            parsed.append(
-                SetStatusOp(
-                    node_id=raw["node_id"],
-                    status=raw["status"],
-                    evidence_refs=raw.get("evidence_refs", []),
-                    reason=raw["reason"],
-                )
-            )
-        elif op_type == "append_metric":
-            parsed.append(
-                AppendMetricOp(
-                    node_id=raw["node_id"],
-                    metric_name=raw["metric_name"],
-                    value=float(raw["value"]),
-                    method=raw["method"],
-                    version=raw["version"],
-                )
-            )
-        else:
-            raise ValueError(f"Unknown op_type: {op_type}")
-    return parsed
-
-
 @mcp.tool()
-def get_node(role: str, run_id: str, node_id: str) -> str:
+def get_node(role: str, run_id: str, node_id: str) -> dict[str, Any]:
     app = _bootstrap()
     ctx = _ctx(role, run_id)
     _guard(ctx, "get_node")
-    return json.dumps(app.tx_service.get_node(node_id))
+    return app.tx_service.get_node(node_id) or {}
 
 
 @mcp.tool()
-def find_frontier(role: str, run_id: str, limit: int = 20) -> str:
+def find_frontier(role: str, run_id: str, limit: int = 20) -> list[dict[str, Any]]:
     app = _bootstrap()
     ctx = _ctx(role, run_id)
     _guard(ctx, "find_frontier")
-    return json.dumps(app.metrics.ranked_frontier(limit))
+    return app.metrics.ranked_frontier(limit)
 
 
 @mcp.tool()
-def graph_statistics(role: str, run_id: str) -> str:
+def graph_statistics(role: str, run_id: str) -> dict[str, Any]:
     app = _bootstrap()
     ctx = _ctx(role, run_id)
     _guard(ctx, "graph_statistics")
-    return json.dumps(app.tx_service.graph_statistics())
+    return app.tx_service.graph_statistics()
 
 
 @mcp.tool()
-def history(role: str, run_id: str, node_id: str) -> str:
+def history(role: str, run_id: str, node_id: str) -> list[dict[str, Any]]:
     app = _bootstrap()
     ctx = _ctx(role, run_id)
     _guard(ctx, "history")
-    return json.dumps(app.tx_service.history(node_id))
+    return app.tx_service.history(node_id)
 
 
 @mcp.tool()
-def submit_report(role: str, run_id: str, report_json: str) -> str:
+def submit_report(role: str, run_id: str, report: dict[str, Any]) -> dict[str, Any]:
     app = _bootstrap()
     ctx = _ctx(role, run_id)
     _guard(ctx, "submit_report")
-    report = app.report_intake.submit(ctx, json.loads(report_json))
+    report_obj = app.report_intake.submit(ctx, report)
     app.activity.project_dashboard(force=True)
-    return json.dumps(report.to_dict())
+    return report_obj.to_dict()
 
 
 @mcp.tool()
-def get_report(role: str, run_id: str, report_id: str) -> str:
+def get_report(role: str, run_id: str, report_id: str) -> dict[str, Any] | None:
     app = _bootstrap()
     ctx = _ctx(role, run_id)
-    _guard(ctx, "get_node")
+    _guard(ctx, "get_report")
     report = app.repo.get_report(report_id)
-    return json.dumps(None if report is None else report.to_dict())
+    return None if report is None else report.to_dict()
 
 
 @mcp.tool()
-def list_pending_reports(role: str, run_id: str) -> str:
+def list_pending_reports(role: str, run_id: str) -> list[dict[str, Any]]:
     app = _bootstrap()
     ctx = _ctx(role, run_id)
-    _guard(ctx, "find_frontier")
-    return json.dumps([r.to_dict() for r in app.repo.list_pending_reports()])
+    _guard(ctx, "list_pending_reports")
+    return [r.to_dict() for r in app.repo.list_pending_reports()]
 
 
 @mcp.tool()
-def review_report(role: str, run_id: str, report_id: str) -> str:
+def review_report(role: str, run_id: str, report_id: str) -> ReviewReportResult:
     app = _bootstrap()
     ctx = _ctx(role, run_id)
-    _guard(ctx, "apply_transaction")
+    _guard(ctx, "review_report")
     outcome = app.reviewer.review_report(ctx, report_id)
-    return json.dumps(
-        {
-            "decision": outcome.decision,
-            "reason_codes": outcome.reason_codes,
-            "accepted": outcome.apply_result.accepted if outcome.apply_result else False,
-        }
+    return ReviewReportResult(
+        decision=outcome.decision,
+        reason_codes=outcome.reason_codes,
+        accepted=outcome.apply_result.accepted if outcome.apply_result else False,
+        accepted_claim_indices=outcome.accepted_claim_indices or [],
+        rejected_claim_indices=outcome.rejected_claim_indices or [],
     )
 
 
 @mcp.tool()
-def compute_metrics(role: str, run_id: str, node_ids_json: str = "[]") -> str:
+def compute_metrics(role: str, run_id: str, node_ids: list[str] | None = None) -> dict[str, Any]:
     app = _bootstrap()
     ctx = _ctx(role, run_id)
     _guard(ctx, "compute_metrics")
-    node_ids = json.loads(node_ids_json)
-    if not node_ids:
-        node_ids = [obj.id for obj in app.repo.list_objects(limit=1000)]
-    app.metrics.recompute(node_ids)
+    ids = node_ids or [obj.id for obj in app.repo.list_objects(limit=1000)]
+    app.metrics.recompute(ids)
     app.repo.conn.commit()
-    return json.dumps({"recomputed": node_ids})
+    return {"recomputed": ids}
 
 
 @mcp.tool()
-def dispatch_worker(role: str, run_id: str, node_id: str = "") -> str:
+def dispatch_worker(role: str, run_id: str, node_id: str = "") -> DispatchWorkerResult:
     app = _bootstrap()
     ctx = _ctx(role, run_id)
-    _guard(ctx, "find_frontier")
+    _guard(ctx, "dispatch_worker")
     result = app.scheduler.dispatch_next(node_id=node_id or None)
-    return json.dumps(result)
+    return DispatchWorkerResult(**result)
 
 
 @mcp.tool()
-def get_activity(role: str, run_id: str) -> str:
+def get_activity(role: str, run_id: str) -> ActivityResult:
     app = _bootstrap()
     ctx = _ctx(role, run_id)
-    _guard(ctx, "graph_statistics")
+    _guard(ctx, "get_activity")
     path = app.activity.project_dashboard(force=True)
-    return json.dumps({"path": str(path), "content": path.read_text(encoding="utf-8")})
+    return ActivityResult(path=str(path), content=path.read_text(encoding="utf-8"))
 
 
 @mcp.tool()
-def apply_transaction(role: str, run_id: str, transaction_json: str) -> str:
+def consume_budget(
+    role: str,
+    run_id: str,
+    node_id: str,
+    budget_name: str,
+    amount: float = 1.0,
+) -> ConsumeBudgetResult:
+    app = _bootstrap()
+    ctx = _ctx(role, run_id, node_scope=node_id)
+    _guard(ctx, "consume_budget")
+    result = app.budgets.consume(
+        run_id=run_id,
+        node_id=node_id,
+        budget_name=budget_name,
+        amount=amount,
+    )
+    app.repo.conn.commit()
+    return ConsumeBudgetResult(**result)
+
+
+@mcp.tool()
+def cancel_run(role: str, run_id: str, target_run_id: str, reason: str = "") -> dict[str, Any]:
+    app = _bootstrap()
+    ctx = _ctx(role, run_id)
+    _guard(ctx, "dispatch_worker")
+    return app.scheduler.cancel_run(target_run_id, reason or "cancelled by operator")
+
+
+@mcp.tool()
+def replay_projection(role: str, run_id: str, tx_id: str) -> ApplyTransactionResult:
     app = _bootstrap()
     ctx = _ctx(role, run_id)
     _guard(ctx, "apply_transaction")
-    payload = json.loads(transaction_json)
+    result = app.tx_service.replay_projection(tx_id)
+    return ApplyTransactionResult(
+        tx_id=result.tx_id,
+        accepted=result.accepted,
+        rejections=result.rejections,
+        affected_node_ids=result.affected_node_ids,
+        git_commit_sha=result.git_commit_sha,
+        projection_status=result.projection_status,
+    )
+
+
+@mcp.tool()
+def apply_transaction(
+    role: str, run_id: str, transaction: dict[str, Any]
+) -> ApplyTransactionResult:
+    app = _bootstrap()
+    ctx = _ctx(role, run_id)
+    _guard(ctx, "apply_transaction")
     tx = Transaction(
-        id=payload.get("id") or new_tx_id(),
+        id=transaction.get("id") or new_tx_id(),
         actor_role=role,
         actor_run_id=run_id,
-        summary=payload["summary"],
-        ops=_parse_ops(payload["ops"]),
-        created_at=payload.get("created_at", ""),
+        summary=transaction["summary"],
+        ops=parse_ops(transaction["ops"]),
+        created_at=transaction.get("created_at", ""),
     )
     result = app.tx_service.apply(ctx, tx)
     app.activity.project_dashboard(force=True)
-    return json.dumps(
-        {
-            "tx_id": result.tx_id,
-            "accepted": result.accepted,
-            "rejections": result.rejections,
-            "affected_node_ids": result.affected_node_ids,
-            "git_commit_sha": result.git_commit_sha,
-            "projection_status": result.projection_status,
-        }
+    return ApplyTransactionResult(
+        tx_id=result.tx_id,
+        accepted=result.accepted,
+        rejections=result.rejections,
+        affected_node_ids=result.affected_node_ids,
+        git_commit_sha=result.git_commit_sha,
+        projection_status=result.projection_status,
     )
 
 

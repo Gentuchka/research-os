@@ -17,10 +17,22 @@
     },
     "subject_node_id": { "type": "string" },
     "summary": { "type": "string" },
+    "attempt_key": { "type": "string" },
+    "attempts": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["label", "outcome"],
+        "properties": {
+          "label": { "type": "string" },
+          "outcome": { "type": "string", "enum": ["success", "failed", "partial"] },
+          "notes": { "type": "string" }
+        }
+      }
+    },
     "information_delta": {
       "type": "array",
-      "items": { "type": "string" },
-      "minItems": 1
+      "items": { "type": "string" }
     },
     "claims": {
       "type": "array",
@@ -33,7 +45,8 @@
           "evidence_refs": {
             "type": "array",
             "items": { "type": "string" }
-          }
+          },
+          "accept": { "type": "boolean" }
         }
       }
     },
@@ -46,7 +59,8 @@
           "type": { "type": "string" },
           "title": { "type": "string" },
           "statement": { "type": "string" },
-          "information_gain": { "type": "string" }
+          "information_gain": { "type": "string" },
+          "claim_index": { "type": "integer" }
         }
       }
     },
@@ -67,7 +81,19 @@
       "type": "array",
       "items": { "type": "string" }
     },
+    "budget_usage": {
+      "type": "object",
+      "properties": {
+        "attempt": { "type": "number" },
+        "token": { "type": "number" },
+        "time": { "type": "number" },
+        "tool": { "type": "number" },
+        "branch": { "type": "number" }
+      }
+    },
     "estimated_difficulty": { "type": "number" },
-    "confidence": { "type": "number" }
+    "confidence": { "type": "number" },
+    "needs_human": { "type": "boolean" },
+    "proposes_status_change": { "type": "boolean" }
   }
 }

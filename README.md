@@ -55,6 +55,16 @@ See `docs/architecture/` and `docs/decisions/`.
 
 **Deferred to P3+:** weighted frontier optimization, Thinker global passes, embedding-backed semantic dedup, custom Obsidian plugin.
 
+## P1–P2 completion notes
+
+- Normalized immutable report entities: `report_claims`, `citations`, `candidate_operations`
+- Review outcomes: `ACCEPT`, `PARTIAL_ACCEPT`, `REJECT`, `NEEDS_HUMAN` with claim indices
+- Run/job lifecycle states: `QUEUED` … `CANCELLED`
+- Typed MCP tools returning structured models (not JSON strings)
+- Budget enforcement via `consume_budget`
+- Projection replay via `replay_projection`
+- Activity panel writes atomically; `AGENT_ACTIVITY.md` is gitignored
+
 ## Setup
 
 Requires Python 3.12+.

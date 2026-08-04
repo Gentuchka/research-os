@@ -5,6 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from research_os.anti_slop.engine import AntiSlopEngine
+from research_os.budgets.service import BudgetService
 from research_os.config import RuntimeConfig
 from research_os.kernel.transaction_service import TransactionService
 from research_os.metrics.engine import MetricsEngine
@@ -28,6 +29,7 @@ class AppServices:
     scheduler: SchedulerService
     vault: VaultProjector
     activity: ActivityProjector
+    budgets: BudgetService
 
 
 def build_app(config: RuntimeConfig) -> AppServices:
@@ -38,8 +40,17 @@ def build_app(config: RuntimeConfig) -> AppServices:
     tx_service = TransactionService(repo, config, vault)
     anti_slop = AntiSlopEngine(repo, config.anti_slop_config)
     metrics = MetricsEngine(repo, config.frontier_config)
+    budgets = BudgetService(repo, config.budgets_config)
     report_intake = ReportIntake(repo)
-    reviewer = ReviewerService(repo, tx_service, anti_slop, metrics, vault, activity)
+    reviewer = ReviewerService(
+        repo,
+        tx_service,
+        anti_slop,
+        metrics,
+        vault,
+        activity,
+        config.rejections_dir,
+    )
     scheduler = SchedulerService(repo, report_intake, reviewer, metrics, activity, config)
     return AppServices(
         config=config,
@@ -51,6 +62,7 @@ def build_app(config: RuntimeConfig) -> AppServices:
         scheduler=scheduler,
         vault=vault,
         activity=activity,
+        budgets=budgets,
     )
 
 

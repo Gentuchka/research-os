@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -35,13 +36,19 @@ class ActivityProjector:
         self._last_refresh = now
         path = self.vault_dir / "00_meta" / "AGENT_ACTIVITY.md"
         path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(self._render(now), encoding="utf-8")
+        self._atomic_write(path, self._render(now))
         return path
+
+    def _atomic_write(self, path: Path, content: str) -> None:
+        tmp = path.with_suffix(".tmp")
+        tmp.write_text(content, encoding="utf-8")
+        os.replace(tmp, path)
 
     def _render(self, now: datetime) -> str:
         active = self.repo.list_active_runs()
         queue = self.repo.list_review_queue()
         recent = self.repo.list_recent_runs(limit=8)
+        blocked = self.repo.list_blocked_jobs()
         stale_seconds = int(self.activity_config.get("heartbeat_stale_seconds", 120))
         stale = self.repo.list_stale_runs(stale_seconds)
         lines = [
@@ -57,11 +64,15 @@ class ActivityProjector:
         else:
             for run in active:
                 elapsed = self._elapsed(run["started_at"], now)
+                budget = self.repo.list_budget_usage(run["id"])
+                budget_text = (
+                    ", ".join(f"{b['budget_name']}={b['amount']}" for b in budget) or "none"
+                )
                 last_update = run.get("last_result_summary") or "in progress"
                 lines.append(
                     f"- **{run['role'].title()}** `{run['id']}` is working on "
                     f"[[{run['node_scope']}]] — {run.get('task_label') or 'Investigating'}. "
-                    f"Elapsed: {elapsed}. Last update: {last_update}."
+                    f"Elapsed: {elapsed}. Budget: {budget_text}. Last update: {last_update}."
                 )
         lines.extend(["", "## Waiting / review queue", ""])
         if not queue:
@@ -72,22 +83,32 @@ class ActivityProjector:
                     f"- Report [[{item['report_id']}]] from worker `{item['worker_run_id']}` "
                     f"is waiting for review."
                 )
+        for job in blocked:
+            lines.append(
+                f"- Job `{job['id']}` on [[{job['node_id']}]] "
+                f"is blocked with status {job['status']}."
+            )
         lines.extend(["", "## Recently finished", ""])
         if not recent:
             lines.append("_No completed runs yet._")
         else:
             for run in recent:
+                duration = self._elapsed(run["started_at"], now) if run.get("ended_at") else "n/a"
+                budget = self.repo.list_budget_usage(run["id"])
+                cost = sum(float(b["amount"]) for b in budget)
                 lines.append(
-                    f"- **{run['role'].title()}** `{run['id']}` finished as **{run['status']}**. "
+                    f"- **{run['role'].title()}** `{run['id']}` finished as **{run['status']}** "
+                    f"in {duration}. Budget use: {cost:.1f}. "
                     f"{run.get('last_result_summary') or run.get('error_message') or ''}"
                 )
         lines.extend(["", "## Problems", ""])
         problems: list[str] = []
-        failures = [r for r in recent if r["status"] in {"failed", "FAILED"}]
+        failures = [r for r in recent if r["status"] == "FAILED"]
         for run in failures:
+            msg = run.get("error_message") or "see run log"
             problems.append(
-                f"- `{run['id']}` failed: {run.get('error_code')} — "
-                f"{run.get('error_message') or 'see run log'}"
+                f"- `{run['id']}` failed: {run.get('error_code')} — {msg}. "
+                "Next action: inspect report or retry dispatch."
             )
         for run in stale:
             problems.append(
@@ -103,6 +124,8 @@ class ActivityProjector:
 
     def _elapsed(self, started_at: str, now: datetime) -> str:
         start = datetime.fromisoformat(started_at)
+        if start.tzinfo is None:
+            start = start.replace(tzinfo=UTC)
         delta = now - start
         minutes = int(delta.total_seconds() // 60)
         seconds = int(delta.total_seconds() % 60)

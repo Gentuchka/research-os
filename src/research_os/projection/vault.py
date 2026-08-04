@@ -54,10 +54,18 @@ class VaultProjector:
         path.write_text("\n".join(lines) + "\n", encoding="utf-8")
         return path
 
-    def project_report(self, report, decision) -> Path:
+    def project_report(
+        self,
+        report,
+        decision,
+        accepted_claim_indices: list[int] | None = None,
+        rejected_claim_indices: list[int] | None = None,
+    ) -> Path:
         out_dir = self.vault_dir / "03_reports"
         out_dir.mkdir(parents=True, exist_ok=True)
         path = out_dir / f"{report.id}.md"
+        accepted_claim_indices = accepted_claim_indices or []
+        rejected_claim_indices = rejected_claim_indices or []
         lines = [
             "---",
             f"ros_id: {report.id}",
@@ -65,6 +73,7 @@ class VaultProjector:
             f"status: {report.status}",
             f"decision: {decision.decision}",
             f"subject: {report.subject_node_id}",
+            f"worker_run: {report.run_id}",
             "---",
             "",
             f"# Report {report.id}",
@@ -76,10 +85,30 @@ class VaultProjector:
         ]
         for item in report.payload.get("information_delta", []):
             lines.append(f"- {item}")
-        lines.extend(["", "## Claims"])
+        lines.extend(["", "## Accepted claims"])
+        if accepted_claim_indices:
+            for idx in accepted_claim_indices:
+                claim = report.payload.get("claims", [])[idx]
+                lines.append(f"- [{idx}] {claim.get('text', '')}")
+        else:
+            lines.append("_None accepted._")
+        lines.extend(["", "## Rejected claims"])
+        if rejected_claim_indices:
+            for idx in rejected_claim_indices:
+                claim = report.payload.get("claims", [])[idx]
+                lines.append(f"- [{idx}] {claim.get('text', '')}")
+        else:
+            lines.append("_None rejected._")
+        lines.extend(["", "## Evidence and citations"])
         for claim in report.payload.get("claims", []):
-            tag = " (speculative)" if claim.get("speculative") else ""
-            lines.append(f"- {claim.get('text', '')}{tag}")
+            refs = claim.get("evidence_refs", [])
+            if refs:
+                lines.append(f"- {claim.get('text', '')}: " + ", ".join(f"[[{r}]]" for r in refs))
+        for ref in report.payload.get("literature_refs", []):
+            lines.append(f"- Literature: [[{ref}]]")
+        lines.extend(["", "## Provenance"])
+        lines.append(f"- Subject node: [[{report.subject_node_id}]]")
+        lines.append(f"- Worker run: `{report.run_id}`")
         if decision.reason_codes:
             lines.extend(["", "## Review outcome"])
             for code in decision.reason_codes:

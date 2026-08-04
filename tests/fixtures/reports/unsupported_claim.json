@@ -1,0 +1,15 @@
+{
+  "report_type": "worker",
+  "subject_node_id": "PLACEHOLDER",
+  "summary": "Unsupported claim",
+  "information_delta": ["Concrete finite-check specialization proposal"],
+  "claims": [
+    {
+      "text": "Goldbach is proved for all even integers.",
+      "speculative": false
+    }
+  ],
+  "proposed_objects": [],
+  "proposed_links": [],
+  "literature_refs": []
+}

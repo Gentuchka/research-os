@@ -1,9 +1,16 @@
-# P0 Kernel — next implementation steps
+# Research OS (package)
 
-1. `src/kernel/` — IDs, content hash, invariant engine, transaction builder
-2. `src/store/` — SQLite schema + migrations
-3. `src/mcp_server/` — tools with role ACL from `configs/roles.yaml`
-4. `src/projection/` — Obsidian renderer
-5. `src/git_bridge/` — commit per accepted transaction
+Python package implementing the Research OS kernel and P1–P2 operational loop.
 
-No agent LLM code until P1 Reviewer loop with fixture reports.
+## Modules
+
+- `kernel/` — invariant-enforced transactions, serialization, replay projection
+- `store/` — SQLite repository, migrations, run lifecycle states
+- `reports/` — immutable report intake with normalized claim/citation/candidate storage
+- `reviewer/` — deterministic anti-slop adjudication (`ACCEPT`, `PARTIAL_ACCEPT`, `REJECT`, `NEEDS_HUMAN`)
+- `scheduler/` — job/run orchestration with fake or live Cursor SDK workers
+- `projection/` — Obsidian vault and activity panel projections
+- `mcp_server/` — typed FastMCP tools and role ACL enforcement
+- `budgets/` — node budget accounting via `consume_budget`
+
+See the root [README.md](../../README.md) for setup and operator flow.

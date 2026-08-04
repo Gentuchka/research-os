@@ -17,3 +17,5 @@ data/canonical/*.db
 data/runs/*
 !data/runs/.gitkeep
 !data/canonical/.gitkeep
+vault/00_meta/AGENT_ACTIVITY.md
+vault/00_meta/AGENT_ACTIVITY.md.tmp

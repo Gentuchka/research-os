@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass
 from typing import Any
 
@@ -160,3 +161,53 @@ class TransactionService:
 
     def history(self, node_id: str) -> list[dict[str, Any]]:
         return self.repo.get_events_for_node(node_id)
+
+    def replay_projection(self, tx_id: str) -> ApplyResult:
+        row = self.repo.conn.execute(
+            "SELECT * FROM transactions WHERE id = ? AND accepted = 1",
+            (tx_id,),
+        ).fetchone()
+        if row is None:
+            raise KernelError(InvariantCode.NOT_FOUND, f"Accepted transaction not found: {tx_id}")
+        payload = json.loads(row["payload_json"])
+        from research_os.kernel.serialization import parse_ops
+
+        tx = Transaction(
+            id=row["id"],
+            actor_role=row["actor_role"],
+            actor_run_id=row["actor_run_id"],
+            summary=row["summary"],
+            ops=parse_ops(payload["ops"]),
+            created_at=row["created_at"],
+        )
+        affected_rows = self.repo.conn.execute(
+            "SELECT DISTINCT object_id FROM object_versions WHERE transaction_id = ?",
+            (tx_id,),
+        ).fetchall()
+        node_ids = [r["object_id"] for r in affected_rows]
+        projection_status = "ok"
+        git_sha = None
+        try:
+            projected_paths = self.projector.project_nodes(node_ids)
+            self.projector.project_frontier()
+            if self.config.git_commit_enabled:
+                git_sha = commit_transaction(
+                    repo_root=self.config.repo_root,
+                    tx=tx,
+                    projected_paths=projected_paths,
+                    transactions_dir=self.config.transactions_dir,
+                )
+            self.repo.update_transaction_projection(tx_id, projection_status)
+            self.repo.conn.commit()
+        except Exception as exc:
+            projection_status = f"projection_failed: {exc}"
+            self.repo.update_transaction_projection(tx_id, projection_status)
+            self.repo.conn.commit()
+        return ApplyResult(
+            tx_id=tx_id,
+            accepted=True,
+            rejections=[],
+            affected_node_ids=node_ids,
+            git_commit_sha=git_sha,
+            projection_status=projection_status,
+        )

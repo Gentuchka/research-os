@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import sqlite3
 
-SCHEMA_VERSION = 4
+SCHEMA_VERSION = 5
 
 V1_TABLES: list[str] = [
     """
@@ -270,4 +270,80 @@ def migrate(conn: sqlite3.Connection) -> None:
             """
         )
         conn.execute("UPDATE schema_version SET version = 4")
+        version = 4
+    if version < 5:
+        _migrate_v5(conn)
+        conn.execute("UPDATE schema_version SET version = 5")
     conn.commit()
+
+
+def _migrate_v5(conn: sqlite3.Connection) -> None:
+    conn.executescript(
+        """
+        CREATE TABLE IF NOT EXISTS report_claims (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            report_id TEXT NOT NULL,
+            claim_index INTEGER NOT NULL,
+            text TEXT NOT NULL,
+            speculative INTEGER NOT NULL DEFAULT 0,
+            evidence_refs_json TEXT NOT NULL DEFAULT '[]',
+            created_at TEXT NOT NULL,
+            UNIQUE(report_id, claim_index),
+            FOREIGN KEY(report_id) REFERENCES reports(id)
+        );
+
+        CREATE TABLE IF NOT EXISTS citations (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            report_id TEXT NOT NULL,
+            ref TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            FOREIGN KEY(report_id) REFERENCES reports(id)
+        );
+
+        CREATE TABLE IF NOT EXISTS candidate_operations (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            report_id TEXT NOT NULL,
+            op_index INTEGER NOT NULL,
+            op_type TEXT NOT NULL,
+            payload_json TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            UNIQUE(report_id, op_index),
+            FOREIGN KEY(report_id) REFERENCES reports(id)
+        );
+        """
+    )
+    for stmt in (
+        "ALTER TABLE review_decisions ADD COLUMN accepted_claim_indices_json TEXT",
+        "ALTER TABLE review_decisions ADD COLUMN rejected_claim_indices_json TEXT",
+        "ALTER TABLE agent_runs ADD COLUMN reasoning_effort TEXT",
+        "ALTER TABLE agent_runs ADD COLUMN resolved_model_id TEXT",
+        "ALTER TABLE reports ADD COLUMN content_fingerprint TEXT",
+    ):
+        try:
+            conn.execute(stmt)
+        except sqlite3.OperationalError:
+            pass
+    conn.execute(
+        """
+        UPDATE agent_runs SET status = 'RUNNING'
+        WHERE status IN ('running', 'RUNNING')
+        """
+    )
+    conn.execute(
+        """
+        UPDATE agent_runs SET status = 'FINISHED'
+        WHERE status IN ('completed', 'FINISHED')
+        """
+    )
+    conn.execute(
+        """
+        UPDATE agent_runs SET status = 'FAILED'
+        WHERE status IN ('failed', 'FAILED')
+        """
+    )
+    conn.execute(
+        """
+        UPDATE jobs SET status = 'QUEUED'
+        WHERE status IN ('queued', 'pending')
+        """
+    )

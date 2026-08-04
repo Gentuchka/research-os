@@ -19,6 +19,9 @@ def test_fresh_db_migrates_to_latest():
             "SELECT name FROM sqlite_master WHERE type='table'"
         ).fetchall()
     }
+    assert "report_claims" in tables
+    assert "citations" in tables
+    assert "candidate_operations" in tables
     assert "reports" in tables
     assert "agent_runs" in tables
     assert "run_budget_usage" in tables

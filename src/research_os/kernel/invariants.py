@@ -14,6 +14,7 @@ from research_os.kernel.types import (
     MergeEquivalenceClassOp,
     Operation,
     SetStatusOp,
+    Status,
     SupersedeNodeOp,
     Transaction,
 )
@@ -34,6 +35,33 @@ PROV_EDGE_TYPES = {
     "prov:from_literature",
     "prov:human_injected",
     "prov:member_of_class",
+}
+ALLOWED_EVIDENCE_TYPES = {
+    "Proof",
+    "Experiment",
+    "Observation",
+    "Construction",
+    "Counterexample",
+    "Paper",
+    "FailedAttempt",
+}
+LEGAL_STATUS_TRANSITIONS: dict[str, set[str]] = {
+    Status.CANDIDATE.value: {Status.ACTIVE.value, Status.REJECTED.value, Status.ARCHIVED.value},
+    Status.ACTIVE.value: {
+        Status.PROVED.value,
+        Status.DISPROVED.value,
+        Status.SUPERSEDED.value,
+        Status.ARCHIVED.value,
+        Status.STUCK.value,
+        Status.FROZEN.value,
+    },
+    Status.PROVED.value: {Status.SUPERSEDED.value, Status.ARCHIVED.value},
+    Status.DISPROVED.value: {Status.SUPERSEDED.value, Status.ARCHIVED.value},
+    Status.SUPERSEDED.value: {Status.ARCHIVED.value},
+    Status.STUCK.value: {Status.ACTIVE.value, Status.ARCHIVED.value, Status.FROZEN.value},
+    Status.FROZEN.value: {Status.ACTIVE.value, Status.ARCHIVED.value},
+    Status.REJECTED.value: {Status.ARCHIVED.value},
+    Status.ARCHIVED.value: set(),
 }
 
 
@@ -58,7 +86,15 @@ class InvariantEngine:
                 "Duplicate node IDs within transaction",
             )
         seen_links: set[tuple[str, str, str, str]] = set()
+        pending_hashes: set[str] = set()
         for op in tx.ops:
+            if isinstance(op, AppendNodeOp):
+                if op.object.content_hash in pending_hashes:
+                    raise KernelError(
+                        InvariantCode.DUPLICATE_CONTENT,
+                        f"Duplicate content hash in transaction: {op.object.content_hash}",
+                    )
+                pending_hashes.add(op.object.content_hash)
             if isinstance(op, CreateLinkOp):
                 key = (op.from_id, op.to_id, op.edge_type, op.graph)
                 if key in seen_links:
@@ -157,6 +193,14 @@ class InvariantEngine:
 
     def _validate_status(self, op: SetStatusOp, pending_ids: set[str]) -> None:
         self._require_exists(op.node_id, pending_ids)
+        current = self.repo.get_object(op.node_id)
+        if current is not None:
+            allowed = LEGAL_STATUS_TRANSITIONS.get(current.status, set())
+            if op.status != current.status and op.status not in allowed:
+                raise KernelError(
+                    InvariantCode.INVALID_OPERATION,
+                    f"Illegal status transition {current.status} -> {op.status}",
+                )
         if op.status in FACT_STATUSES and not op.evidence_refs:
             raise KernelError(
                 InvariantCode.INV_UNSUPPORTED_CLAIM,
@@ -164,6 +208,12 @@ class InvariantEngine:
             )
         for ref in op.evidence_refs:
             self._require_exists(ref, pending_ids)
+            evidence = self.repo.get_object(ref)
+            if evidence is not None and evidence.type not in ALLOWED_EVIDENCE_TYPES:
+                raise KernelError(
+                    InvariantCode.INV_UNSUPPORTED_CLAIM,
+                    f"Evidence type not allowed: {evidence.type}",
+                )
 
     def _validate_metric(self, op: AppendMetricOp, pending_ids: set[str]) -> None:
         self._require_exists(op.node_id, pending_ids)
