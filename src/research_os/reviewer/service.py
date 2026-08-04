@@ -67,7 +67,12 @@ class ReviewerService:
         if report is None:
             raise ValueError(f"Report not found: {report_id}")
 
-        if report.status != ReportStatus.PENDING.value:
+        recoverable_statuses = {
+            ReportStatus.PENDING.value,
+            ReportStatus.IN_REVIEW.value,
+            ReportStatus.NEEDS_HUMAN.value,
+        }
+        if report.status not in recoverable_statuses:
             existing = self.repo.get_latest_decision(report_id)
             if existing is not None:
                 return AdjudicationOutcome(
@@ -79,8 +84,20 @@ class ReviewerService:
                 )
             raise ValueError(f"Report {report_id} is not pending review")
 
-        self.repo.update_report_status(report_id, ReportStatus.IN_REVIEW.value)
-        self.repo.conn.commit()
+        if self.repo.has_review_decision(report_id):
+            existing = self.repo.get_latest_decision(report_id)
+            if existing is not None:
+                return AdjudicationOutcome(
+                    decision=existing.decision,
+                    reason_codes=existing.reason_codes,
+                    transaction=None,
+                    accepted_claim_indices=existing.accepted_claim_indices,
+                    rejected_claim_indices=existing.rejected_claim_indices,
+                )
+
+        if report.status != ReportStatus.IN_REVIEW.value:
+            self.repo.update_report_status(report_id, ReportStatus.IN_REVIEW.value)
+            self.repo.conn.commit()
 
         if report.payload.get("needs_human"):
             return self._finalize(
@@ -92,7 +109,7 @@ class ReviewerService:
                 list(range(len(report.payload.get("claims", [])))),
                 None,
                 None,
-                ReportStatus.PENDING.value,
+                ReportStatus.NEEDS_HUMAN.value,
             )
 
         findings = self.anti_slop.check_report(report.payload, run_id=report.run_id)
@@ -198,6 +215,16 @@ class ReviewerService:
         apply_result: Any | None,
         report_status: str,
     ) -> AdjudicationOutcome:
+        if self.repo.has_review_decision(report.id):
+            existing = self.repo.get_latest_decision(report.id)
+            if existing is not None:
+                return AdjudicationOutcome(
+                    decision=existing.decision,
+                    reason_codes=existing.reason_codes,
+                    transaction=None,
+                    accepted_claim_indices=existing.accepted_claim_indices,
+                    rejected_claim_indices=existing.rejected_claim_indices,
+                )
         decision = ReviewDecision(
             id=new_decision_id(),
             report_id=report.id,
@@ -213,7 +240,10 @@ class ReviewerService:
         self.repo.update_report_status(report.id, report_status)
         self.repo.close_review_queue(report.id, ctx.run_id)
         self.repo.conn.commit()
-        self.vault.project_report(report, decision, accepted_claim_indices, rejected_claim_indices)
+        fresh = self.repo.get_report(report.id) or report
+        self.vault.project_report(
+            fresh, decision, accepted_claim_indices, rejected_claim_indices
+        )
         if decision_kind == ReviewDecisionKind.REJECT.value:
             self._export_rejection(report, decision)
         self.activity.project_dashboard(force=True)

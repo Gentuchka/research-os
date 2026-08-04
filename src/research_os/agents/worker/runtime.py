@@ -28,6 +28,7 @@ class FakeCursorAgent:
             ],
             "claims": [
                 {
+                    "id": "claim_fake_0",
                     "text": "A specialized variant may reduce the problem to a finite case.",
                     "speculative": True,
                 }
@@ -38,6 +39,7 @@ class FakeCursorAgent:
                     "title": "Finite case variant",
                     "statement": "The conjecture holds for all even integers below 10^6.",
                     "information_gain": "Finite verification target for computational search.",
+                    "claim_index": 0,
                 }
             ],
             "proposed_links": [

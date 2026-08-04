@@ -32,14 +32,16 @@
     },
     "information_delta": {
       "type": "array",
-      "items": { "type": "string" }
+      "items": { "type": "string" },
+      "minItems": 1
     },
     "claims": {
       "type": "array",
       "items": {
         "type": "object",
-        "required": ["text"],
+        "required": ["id", "text"],
         "properties": {
+          "id": { "type": "string" },
           "text": { "type": "string" },
           "speculative": { "type": "boolean" },
           "evidence_refs": {
@@ -48,19 +50,20 @@
           },
           "accept": { "type": "boolean" }
         }
-      }
+      },
+      "minItems": 1
     },
     "proposed_objects": {
       "type": "array",
       "items": {
         "type": "object",
-        "required": ["type", "title", "statement", "information_gain"],
+        "required": ["type", "title", "statement", "information_gain", "claim_index"],
         "properties": {
           "type": { "type": "string" },
           "title": { "type": "string" },
           "statement": { "type": "string" },
           "information_gain": { "type": "string" },
-          "claim_index": { "type": "integer" }
+          "claim_index": { "type": "integer", "minimum": 0 }
         }
       }
     },

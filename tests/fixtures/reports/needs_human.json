@@ -5,6 +5,7 @@
   "information_delta": ["Escalated ambiguity requires operator review"],
   "claims": [
     {
+      "id": "claim_needs_human",
       "text": "The main conjecture may need a new axiom.",
       "speculative": true
     }

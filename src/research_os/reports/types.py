@@ -12,6 +12,7 @@ from research_os.kernel.types import new_id, utc_now
 class ReportStatus(StrEnum):
     PENDING = "PENDING"
     IN_REVIEW = "IN_REVIEW"
+    NEEDS_HUMAN = "NEEDS_HUMAN"
     ACCEPTED = "ACCEPTED"
     PARTIAL = "PARTIAL"
     REJECTED = "REJECTED"

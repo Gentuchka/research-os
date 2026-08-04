@@ -5,6 +5,7 @@
   "information_delta": ["maybe", "hmm"],
   "claims": [
     {
+      "id": "claim_low_info",
       "text": "Something might be true.",
       "speculative": true
     }

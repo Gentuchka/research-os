@@ -20,13 +20,20 @@ class ReportIntake:
             raise ValueError(f"Subject node not found: {payload['subject_node_id']}")
 
         fingerprint = self.repo._report_fingerprint(payload)
-        existing = self.repo.get_report_by_fingerprint(fingerprint)
-        if existing is not None:
-            return existing
 
         existing_for_run = self.repo.get_report_for_run(ctx.run_id)
         if existing_for_run is not None:
-            return existing_for_run
+            existing_fp = self.repo._report_fingerprint(existing_for_run.payload)
+            if fingerprint == existing_fp:
+                return existing_for_run
+            raise ValueError(
+                f"Run {ctx.run_id} already submitted report {existing_for_run.id}; "
+                "different content is not allowed"
+            )
+
+        existing = self.repo.get_report_by_fingerprint(fingerprint)
+        if existing is not None:
+            return existing
 
         report = ResearchReport(
             id=new_report_id(),

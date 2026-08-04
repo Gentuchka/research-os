@@ -7,6 +7,7 @@
   ],
   "claims": [
     {
+      "id": "claim_finite_check",
       "text": "Checking even integers below 10^6 may yield useful partial evidence.",
       "speculative": true
     }
@@ -16,7 +17,8 @@
       "type": "Hypothesis",
       "title": "Finite Goldbach check",
       "statement": "Goldbach holds for all even integers below 10^6.",
-      "information_gain": "Creates a computationally testable finite target."
+      "information_gain": "Creates a computationally testable finite target.",
+      "claim_index": 0
     }
   ],
   "proposed_links": [

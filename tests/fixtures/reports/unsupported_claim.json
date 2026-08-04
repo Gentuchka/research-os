@@ -5,6 +5,7 @@
   "information_delta": ["Concrete finite-check specialization proposal"],
   "claims": [
     {
+      "id": "claim_unsupported",
       "text": "Goldbach is proved for all even integers.",
       "speculative": false
     }

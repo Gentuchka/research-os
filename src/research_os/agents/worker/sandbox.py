@@ -6,6 +6,16 @@ import shutil
 import tempfile
 from pathlib import Path
 
+WORKER_MCP_TOOLS = frozenset(
+    {
+        "get_node",
+        "history",
+        "find_frontier",
+        "submit_report",
+        "consume_budget",
+    }
+)
+
 HOOKS_JSON = """{
   "version": 1,
   "hooks": {
@@ -68,17 +78,24 @@ print(json.dumps({
 }))
 """
 
-ALLOW_RESEARCH_MCP = """import json, sys
+ALLOW_RESEARCH_MCP = f"""import json, sys
+ALLOWED = {sorted(WORKER_MCP_TOOLS)}
 payload = json.load(sys.stdin)
 server = (payload.get("server") or payload.get("mcpServer") or "").lower()
-tool_name = (payload.get("tool") or payload.get("toolName") or "").lower()
-if "research" in server or tool_name.startswith("submit_report") or tool_name.startswith("get_"):
-    print(json.dumps({"permission": "allow"}))
-else:
-    print(json.dumps({
+tool_name = (payload.get("tool") or payload.get("toolName") or "")
+if "research" not in server:
+    print(json.dumps({{
         "permission": "deny",
         "agent_message": "Only the Research OS MCP server is allowed in worker sandboxes."
-    }))
+    }}))
+    sys.exit(0)
+if tool_name not in ALLOWED:
+    print(json.dumps({{
+        "permission": "deny",
+        "agent_message": f"Worker sandbox denied MCP tool: {{tool_name}}"
+    }}))
+    sys.exit(0)
+print(json.dumps({{"permission": "allow"}}))
 """
 
 

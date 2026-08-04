@@ -12,6 +12,8 @@ from research_os.kernel.types import (
     AppendNodeOp,
     ArchiveNodeOp,
     CreateLinkOp,
+    InvariantCode,
+    KernelError,
     MergeEquivalenceClassOp,
     Operation,
     Provenance,
@@ -22,7 +24,15 @@ from research_os.kernel.types import (
     utc_now,
 )
 from research_os.reports.types import ReportStatus, ResearchReport, ReviewDecision
-from research_os.store.run_lifecycle import ACTIVE_RUN_STATUSES, TERMINAL_RUN_STATUSES, RunStatus
+from research_os.store.run_lifecycle import (
+    ACTIVE_RUN_STATUSES,
+    ALLOWED_BUDGET_NAMES,
+    LEGAL_JOB_TRANSITIONS,
+    LEGAL_RUN_TRANSITIONS,
+    TERMINAL_RUN_STATUSES,
+    RunStatus,
+    assert_legal_transition,
+)
 
 
 class Repository:
@@ -421,12 +431,14 @@ class Repository:
             self.conn.execute(
                 """
                 INSERT INTO report_claims(
-                    report_id, claim_index, text, speculative, evidence_refs_json, created_at
-                ) VALUES (?, ?, ?, ?, ?, ?)
+                    report_id, claim_index, claim_id, text, speculative,
+                    evidence_refs_json, created_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     report.id,
                     idx,
+                    claim.get("id", f"claim_{idx}"),
                     claim.get("text", ""),
                     int(bool(claim.get("speculative"))),
                     json.dumps(claim.get("evidence_refs", [])),
@@ -548,6 +560,93 @@ class Repository:
             else [],
         )
 
+    def get_report_claims(self, report_id: str) -> list[dict[str, Any]]:
+        rows = self.conn.execute(
+            """
+            SELECT claim_index, claim_id, text, speculative, evidence_refs_json
+            FROM report_claims
+            WHERE report_id = ?
+            ORDER BY claim_index
+            """,
+            (report_id,),
+        ).fetchall()
+        result: list[dict[str, Any]] = []
+        for row in rows:
+            keys = row.keys()
+            result.append(
+                {
+                    "claim_index": row["claim_index"],
+                    "id": row["claim_id"] if "claim_id" in keys and row["claim_id"] else None,
+                    "text": row["text"],
+                    "speculative": bool(row["speculative"]),
+                    "evidence_refs": json.loads(row["evidence_refs_json"]),
+                }
+            )
+        return result
+
+    def get_report_citations(self, report_id: str) -> list[str]:
+        rows = self.conn.execute(
+            "SELECT ref FROM citations WHERE report_id = ? ORDER BY id",
+            (report_id,),
+        ).fetchall()
+        return [row["ref"] for row in rows]
+
+    def get_candidate_operations(self, report_id: str) -> list[dict[str, Any]]:
+        rows = self.conn.execute(
+            """
+            SELECT op_index, op_type, payload_json
+            FROM candidate_operations
+            WHERE report_id = ?
+            ORDER BY op_index
+            """,
+            (report_id,),
+        ).fetchall()
+        return [
+            {
+                "op_index": row["op_index"],
+                "op_type": row["op_type"],
+                "payload": json.loads(row["payload_json"]),
+            }
+            for row in rows
+        ]
+
+    def get_run(self, run_id: str) -> dict[str, Any] | None:
+        row = self.conn.execute("SELECT * FROM agent_runs WHERE id = ?", (run_id,)).fetchone()
+        return None if row is None else dict(row)
+
+    def get_run_role(self, run_id: str) -> str | None:
+        row = self.conn.execute("SELECT role FROM agent_runs WHERE id = ?", (run_id,)).fetchone()
+        return None if row is None else row["role"]
+
+    def persist_sdk_ids(self, run_id: str, sdk_agent_id: str, sdk_run_id: str) -> None:
+        self.conn.execute(
+            """
+            UPDATE agent_runs
+            SET sdk_agent_id = ?, sdk_run_id = ?, updated_at = ?
+            WHERE id = ?
+            """,
+            (sdk_agent_id, sdk_run_id, utc_now().isoformat(), run_id),
+        )
+
+    def get_sdk_run_id(self, run_id: str) -> str | None:
+        row = self.conn.execute(
+            "SELECT sdk_run_id FROM agent_runs WHERE id = ?",
+            (run_id,),
+        ).fetchone()
+        if row is None:
+            return None
+        keys = row.keys()
+        return row["sdk_run_id"] if "sdk_run_id" in keys else None
+
+    def has_attempt_budget(self, node_id: str) -> bool:
+        row = self.conn.execute(
+            "SELECT attempt_budget, attempt_used FROM budgets WHERE node_id = ?",
+            (node_id,),
+        ).fetchone()
+        if row is None:
+            return True
+        return float(row["attempt_used"]) < float(row["attempt_budget"])
+
     def get_report(self, report_id: str) -> ResearchReport | None:
         row = self.conn.execute("SELECT * FROM reports WHERE id = ?", (report_id,)).fetchone()
         if row is None:
@@ -631,6 +730,10 @@ class Repository:
         *,
         assigned_run_id: str | None = None,
     ) -> None:
+        row = self.conn.execute("SELECT status FROM jobs WHERE id = ?", (job_id,)).fetchone()
+        if row is None:
+            raise ValueError(f"Job not found: {job_id}")
+        assert_legal_transition(row["status"], status, LEGAL_JOB_TRANSITIONS, label="job")
         now = utc_now().isoformat()
         self.conn.execute(
             """
@@ -641,17 +744,32 @@ class Repository:
             (status, assigned_run_id, now, job_id),
         )
 
+    def list_waiting_jobs(self) -> list[dict[str, Any]]:
+        rows = self.conn.execute(
+            """
+            SELECT * FROM jobs
+            WHERE status IN ('WAITING_FOR_REVIEW', 'QUEUED')
+            ORDER BY updated_at DESC
+            """
+        ).fetchall()
+        return [dict(row) for row in rows]
+
     def list_blocked_jobs(self) -> list[dict[str, Any]]:
         rows = self.conn.execute(
             """
             SELECT * FROM jobs
-            WHERE status IN ('FAILED', 'WAITING_FOR_REVIEW', 'CANCELLED')
+            WHERE status IN ('FAILED', 'CANCELLED')
             ORDER BY updated_at DESC
             """
         ).fetchall()
         return [dict(row) for row in rows]
 
     def consume_node_budget(self, node_id: str, budget_name: str, amount: float) -> float:
+        if budget_name not in ALLOWED_BUDGET_NAMES:
+            raise KernelError(
+                InvariantCode.BUDGET_EXHAUSTED,
+                f"Unknown budget name: {budget_name}",
+            )
         defaults = {
             "attempt": "attempt_budget",
             "token": "token_budget",
@@ -697,10 +815,16 @@ class Repository:
         resolved_model_id: str | None = None,
         status: str = RunStatus.RUNNING.value,
     ) -> None:
+        existing = self.conn.execute(
+            "SELECT id FROM agent_runs WHERE id = ?",
+            (run_id,),
+        ).fetchone()
+        if existing is not None:
+            raise ValueError(f"Run already exists: {run_id}")
         now = utc_now().isoformat()
         self.conn.execute(
             """
-            INSERT OR REPLACE INTO agent_runs(
+            INSERT INTO agent_runs(
                 id, role, status, node_scope, task_label, model_profile,
                 reasoning_effort, resolved_model_id,
                 started_at, updated_at, ended_at, last_result_summary,
@@ -723,6 +847,12 @@ class Repository:
         self._append_agent_event(run_id, "RUN_STARTED", task_label or "Run started", {})
 
     def transition_run(self, run_id: str, status: str, summary: str | None = None) -> None:
+        row = self.conn.execute("SELECT status FROM agent_runs WHERE id = ?", (run_id,)).fetchone()
+        if row is None:
+            raise ValueError(f"Run not found: {run_id}")
+        assert_legal_transition(
+            row["status"], status, LEGAL_RUN_TRANSITIONS, label="run"
+        )
         now = utc_now().isoformat()
         self.conn.execute(
             """
@@ -767,6 +897,14 @@ class Repository:
         self._append_agent_event(run_id, "RUN_FAILED", message, {"code": code})
 
     def cancel_run(self, run_id: str, reason: str = "cancelled") -> None:
+        row = self.conn.execute("SELECT status FROM agent_runs WHERE id = ?", (run_id,)).fetchone()
+        if row is None:
+            raise ValueError(f"Run not found: {run_id}")
+        if row["status"] in TERMINAL_RUN_STATUSES:
+            return
+        assert_legal_transition(
+            row["status"], RunStatus.CANCELLED.value, LEGAL_RUN_TRANSITIONS, label="run"
+        )
         now = utc_now().isoformat()
         self.conn.execute(
             """

@@ -10,13 +10,23 @@ from research_os.acl import ACL
 from research_os.config import RuntimeConfig
 from research_os.factory import build_app
 from research_os.kernel.serialization import parse_ops
-from research_os.kernel.types import AgentRole, RoleContext, Transaction, new_tx_id
+from research_os.kernel.types import (
+    AgentRole,
+    InvariantCode,
+    KernelError,
+    RoleContext,
+    Transaction,
+    new_tx_id,
+)
 from research_os.mcp_server.models import (
     ActivityResult,
     ApplyTransactionResult,
+    CancelRunResult,
+    ComputeMetricsResult,
     ConsumeBudgetResult,
     DispatchWorkerResult,
     ReviewReportResult,
+    SubmitReportResult,
 )
 
 mcp = FastMCP("research-os")
@@ -34,6 +44,13 @@ def _bootstrap(config: RuntimeConfig | None = None):
 
 
 def _ctx(role: str, run_id: str, node_scope: str | None = None) -> RoleContext:
+    app = _bootstrap()
+    authoritative = app.repo.get_run_role(run_id)
+    if authoritative is not None and authoritative != role:
+        raise KernelError(
+            InvariantCode.ACL_DENIED,
+            f"run_id {run_id} is bound to role {authoritative}, not {role}",
+        )
     return RoleContext(role=AgentRole(role), run_id=run_id, node_scope=node_scope)
 
 
@@ -75,13 +92,13 @@ def history(role: str, run_id: str, node_id: str) -> list[dict[str, Any]]:
 
 
 @mcp.tool()
-def submit_report(role: str, run_id: str, report: dict[str, Any]) -> dict[str, Any]:
+def submit_report(role: str, run_id: str, report: dict[str, Any]) -> SubmitReportResult:
     app = _bootstrap()
     ctx = _ctx(role, run_id)
     _guard(ctx, "submit_report")
     report_obj = app.report_intake.submit(ctx, report)
     app.activity.project_dashboard(force=True)
-    return report_obj.to_dict()
+    return SubmitReportResult(**report_obj.to_dict())
 
 
 @mcp.tool()
@@ -117,14 +134,16 @@ def review_report(role: str, run_id: str, report_id: str) -> ReviewReportResult:
 
 
 @mcp.tool()
-def compute_metrics(role: str, run_id: str, node_ids: list[str] | None = None) -> dict[str, Any]:
+def compute_metrics(
+    role: str, run_id: str, node_ids: list[str] | None = None
+) -> ComputeMetricsResult:
     app = _bootstrap()
     ctx = _ctx(role, run_id)
     _guard(ctx, "compute_metrics")
     ids = node_ids or [obj.id for obj in app.repo.list_objects(limit=1000)]
     app.metrics.recompute(ids)
     app.repo.conn.commit()
-    return {"recomputed": ids}
+    return ComputeMetricsResult(recomputed=ids)
 
 
 @mcp.tool()
@@ -167,18 +186,21 @@ def consume_budget(
 
 
 @mcp.tool()
-def cancel_run(role: str, run_id: str, target_run_id: str, reason: str = "") -> dict[str, Any]:
+def cancel_run(
+    role: str, run_id: str, target_run_id: str, reason: str = ""
+) -> CancelRunResult:
     app = _bootstrap()
     ctx = _ctx(role, run_id)
-    _guard(ctx, "dispatch_worker")
-    return app.scheduler.cancel_run(target_run_id, reason or "cancelled by operator")
+    _guard(ctx, "cancel_run")
+    result = app.scheduler.cancel_run(target_run_id, reason or "cancelled by operator")
+    return CancelRunResult(**result)
 
 
 @mcp.tool()
 def replay_projection(role: str, run_id: str, tx_id: str) -> ApplyTransactionResult:
     app = _bootstrap()
     ctx = _ctx(role, run_id)
-    _guard(ctx, "apply_transaction")
+    _guard(ctx, "replay_projection")
     result = app.tx_service.replay_projection(tx_id)
     return ApplyTransactionResult(
         tx_id=result.tx_id,

@@ -61,6 +61,9 @@ class VaultProjector:
         accepted_claim_indices: list[int] | None = None,
         rejected_claim_indices: list[int] | None = None,
     ) -> Path:
+        fresh = self.repo.get_report(report.id)
+        if fresh is not None:
+            report = fresh
         out_dir = self.vault_dir / "03_reports"
         out_dir.mkdir(parents=True, exist_ok=True)
         path = out_dir / f"{report.id}.md"

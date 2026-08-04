@@ -2,9 +2,12 @@
 
 from __future__ import annotations
 
+import json
 import sqlite3
 
-SCHEMA_VERSION = 5
+from research_os.kernel.types import canonical_content_hash
+
+SCHEMA_VERSION = 6
 
 V1_TABLES: list[str] = [
     """
@@ -274,7 +277,192 @@ def migrate(conn: sqlite3.Connection) -> None:
     if version < 5:
         _migrate_v5(conn)
         conn.execute("UPDATE schema_version SET version = 5")
+        version = 5
+    if version < 6:
+        _migrate_v6(conn)
+        conn.execute("UPDATE schema_version SET version = 6")
     conn.commit()
+
+
+def _report_fingerprint_from_payload(payload: dict) -> str:
+    normalized = {
+        "subject_node_id": payload["subject_node_id"],
+        "information_delta": sorted(payload.get("information_delta", [])),
+        "claims": [c.get("text", "") for c in payload.get("claims", [])],
+    }
+    return canonical_content_hash(normalized)
+
+
+def _backfill_report_entities(conn: sqlite3.Connection, report_id: str, payload: dict) -> None:
+    row = conn.execute(
+        "SELECT COUNT(*) AS count FROM report_claims WHERE report_id = ?",
+        (report_id,),
+    ).fetchone()
+    if row and int(row["count"]) > 0:
+        return
+    now = payload.get("created_at") or "1970-01-01T00:00:00"
+    for idx, claim in enumerate(payload.get("claims", [])):
+        conn.execute(
+            """
+            INSERT OR IGNORE INTO report_claims(
+                report_id, claim_index, claim_id, text, speculative,
+                evidence_refs_json, created_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                report_id,
+                idx,
+                claim.get("id", f"claim_{idx}"),
+                claim.get("text", ""),
+                int(bool(claim.get("speculative"))),
+                json.dumps(claim.get("evidence_refs", [])),
+                now,
+            ),
+        )
+    for ref in payload.get("literature_refs", []):
+        conn.execute(
+            "INSERT OR IGNORE INTO citations(report_id, ref, created_at) VALUES (?, ?, ?)",
+            (report_id, ref, now),
+        )
+    op_index = 0
+    for proposed in payload.get("proposed_objects", []):
+        conn.execute(
+            """
+            INSERT OR IGNORE INTO candidate_operations(
+                report_id, op_index, op_type, payload_json, created_at
+            ) VALUES (?, ?, ?, ?, ?)
+            """,
+            (report_id, op_index, "append_node", json.dumps(proposed), now),
+        )
+        op_index += 1
+    for link in payload.get("proposed_links", []):
+        conn.execute(
+            """
+            INSERT OR IGNORE INTO candidate_operations(
+                report_id, op_index, op_type, payload_json, created_at
+            ) VALUES (?, ?, ?, ?, ?)
+            """,
+            (report_id, op_index, "create_link", json.dumps(link), now),
+        )
+        op_index += 1
+
+
+def _migrate_v6(conn: sqlite3.Connection) -> None:
+    conn.execute("PRAGMA foreign_keys = OFF")
+    for stmt in (
+        "ALTER TABLE agent_runs ADD COLUMN sdk_agent_id TEXT",
+        "ALTER TABLE agent_runs ADD COLUMN sdk_run_id TEXT",
+        "ALTER TABLE report_claims ADD COLUMN claim_id TEXT",
+    ):
+        try:
+            conn.execute(stmt)
+        except sqlite3.OperationalError:
+            pass
+
+    rows = conn.execute("SELECT id, payload_json, content_fingerprint FROM reports").fetchall()
+    for row in rows:
+        payload = json.loads(row["payload_json"])
+        fingerprint = row["content_fingerprint"] or _report_fingerprint_from_payload(payload)
+        if not row["content_fingerprint"]:
+            conn.execute(
+                "UPDATE reports SET content_fingerprint = ? WHERE id = ?",
+                (fingerprint, row["id"]),
+            )
+        _backfill_report_entities(conn, row["id"], payload)
+
+    review_table = conn.execute(
+        "SELECT name FROM sqlite_master WHERE type='table' AND name='review_decisions'"
+    ).fetchone()
+    if review_table is not None:
+        conn.execute(
+            """
+            UPDATE reports SET status = 'NEEDS_HUMAN'
+            WHERE status = 'PENDING'
+            AND id IN (
+                SELECT report_id FROM review_decisions WHERE decision = 'NEEDS_HUMAN'
+            )
+            """
+        )
+
+    conn.executescript(
+        """
+        CREATE TABLE IF NOT EXISTS agent_runs_v6 (
+            id TEXT PRIMARY KEY,
+            role TEXT NOT NULL CHECK(role IN ('worker','reviewer','thinker','scheduler','human')),
+            status TEXT NOT NULL CHECK(
+                status IN (
+                    'QUEUED','STARTING','RUNNING','WAITING_FOR_REVIEW',
+                    'REVIEWING','FINISHED','FAILED','CANCELLED'
+                )
+            ),
+            node_scope TEXT,
+            task_label TEXT,
+            model_profile TEXT,
+            reasoning_effort TEXT,
+            resolved_model_id TEXT,
+            sdk_agent_id TEXT,
+            sdk_run_id TEXT,
+            started_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            ended_at TEXT,
+            last_result_summary TEXT,
+            error_code TEXT,
+            error_message TEXT
+        );
+        INSERT OR IGNORE INTO agent_runs_v6
+        SELECT
+            id, role, status, node_scope, task_label, model_profile,
+            reasoning_effort, resolved_model_id, sdk_agent_id, sdk_run_id,
+            started_at, updated_at, ended_at, last_result_summary,
+            error_code, error_message
+        FROM agent_runs;
+        DROP TABLE agent_runs;
+        ALTER TABLE agent_runs_v6 RENAME TO agent_runs;
+
+        CREATE TABLE IF NOT EXISTS jobs_v6 (
+            id TEXT PRIMARY KEY,
+            node_id TEXT NOT NULL,
+            status TEXT NOT NULL CHECK(
+                status IN (
+                    'QUEUED','STARTING','RUNNING','WAITING_FOR_REVIEW',
+                    'REVIEWING','FINISHED','FAILED','CANCELLED'
+                )
+            ),
+            priority REAL NOT NULL DEFAULT 0,
+            assigned_run_id TEXT,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        );
+        INSERT OR IGNORE INTO jobs_v6
+        SELECT id, node_id, status, priority, assigned_run_id, created_at, updated_at
+        FROM jobs;
+        DROP TABLE jobs;
+        ALTER TABLE jobs_v6 RENAME TO jobs;
+
+        CREATE TABLE IF NOT EXISTS reports_v6 (
+            id TEXT PRIMARY KEY,
+            report_type TEXT NOT NULL CHECK(report_type IN ('worker','thinker','human')),
+            subject_node_id TEXT NOT NULL,
+            status TEXT NOT NULL CHECK(
+                status IN (
+                    'PENDING','IN_REVIEW','NEEDS_HUMAN','ACCEPTED',
+                    'PARTIAL','REJECTED'
+                )
+            ),
+            run_id TEXT NOT NULL,
+            payload_json TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            content_fingerprint TEXT
+        );
+        INSERT OR IGNORE INTO reports_v6
+        SELECT id, report_type, subject_node_id, status, run_id, payload_json,
+               created_at, content_fingerprint
+        FROM reports;
+        DROP TABLE reports;
+        ALTER TABLE reports_v6 RENAME TO reports;
+        """
+    )
+    conn.execute("PRAGMA foreign_keys = ON")
 
 
 def _migrate_v5(conn: sqlite3.Connection) -> None:

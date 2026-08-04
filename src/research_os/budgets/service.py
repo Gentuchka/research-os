@@ -22,6 +22,13 @@ class BudgetService:
         amount: float = 1.0,
         detail: str | None = None,
     ) -> dict[str, Any]:
+        from research_os.store.run_lifecycle import ALLOWED_BUDGET_NAMES
+
+        if budget_name not in ALLOWED_BUDGET_NAMES:
+            raise KernelError(
+                InvariantCode.BUDGET_EXHAUSTED,
+                f"Unknown budget name: {budget_name}",
+            )
         remaining = self.repo.consume_node_budget(node_id, budget_name, amount)
         self.repo.record_budget_usage(run_id, budget_name, amount, detail)
         if remaining < 0:

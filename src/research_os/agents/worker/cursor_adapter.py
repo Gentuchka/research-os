@@ -2,9 +2,10 @@
 
 from __future__ import annotations
 
-import json
 import os
+import re
 import sys
+import time
 from typing import Any
 
 from research_os.agents.worker.model_resolver import ModelResolver
@@ -14,6 +15,9 @@ from research_os.kernel.types import RoleContext
 from research_os.reports.intake import ReportIntake
 from research_os.reports.types import ResearchReport
 from research_os.store.repository import Repository
+
+MAX_STARTUP_RETRIES = 3
+HEARTBEAT_INTERVAL_SECONDS = 15
 
 
 class CursorSdkWorker:
@@ -51,36 +55,71 @@ class CursorSdkWorker:
             "PYTHONPATH": str(self.config.repo_root / "src"),
         }
         prompt = self._build_prompt(subject_node_id, ctx.run_id)
+        sdk_run: Any = None
         try:
             self.repo.heartbeat_run(ctx.run_id, f"Launching worker ({resolved.model_id})")
             self.repo.record_budget_usage(ctx.run_id, "model_profile", 1.0, resolved.profile_name)
             self.repo.conn.commit()
-            with Agent.create(
-                model={"id": resolved.model_id, "reasoning_effort": resolved.reasoning_effort}
-                if resolved.reasoning_effort
-                else resolved.model_id,
-                api_key=api_key,
-                local=LocalAgentOptions(cwd=str(sandbox), setting_sources=[]),
-                mcp_servers={
-                    "research-os": {
-                        "command": mcp_command,
-                        "args": mcp_args,
-                        "env": mcp_env,
-                    }
-                },
-            ) as agent:
-                run = agent.send(prompt)
-                self.repo.heartbeat_run(ctx.run_id, f"SDK run {run.id} in progress")
+
+            agent = None
+            for attempt in range(1, MAX_STARTUP_RETRIES + 1):
+                try:
+                    model_arg: object = (
+                        {"id": resolved.model_id, "reasoning_effort": resolved.reasoning_effort}
+                        if resolved.reasoning_effort
+                        else resolved.model_id
+                    )
+                    agent = Agent.create(
+                        model=model_arg,
+                        api_key=api_key,
+                        local=LocalAgentOptions(cwd=str(sandbox), setting_sources=[]),
+                        mcp_servers={
+                            "research-os": {
+                                "command": mcp_command,
+                                "args": mcp_args,
+                                "env": mcp_env,
+                            }
+                        },
+                    )
+                    break
+                except CursorAgentError as exc:
+                    retryable = getattr(exc, "retryable", False)
+                    if attempt >= MAX_STARTUP_RETRIES or not retryable:
+                        raise
+                    delay = getattr(exc, "retry_after_seconds", 1.0)
+                    self.repo.heartbeat_run(
+                        ctx.run_id,
+                        f"SDK startup retry {attempt}/{MAX_STARTUP_RETRIES}",
+                    )
+                    self.repo.conn.commit()
+                    time.sleep(delay)
+
+            if agent is None:
+                raise RuntimeError("Failed to create Cursor SDK agent")
+
+            with agent:
+                sdk_run = agent.send(prompt)
+                self.repo.persist_sdk_ids(ctx.run_id, str(agent.id), str(sdk_run.id))
+                self.repo.heartbeat_run(ctx.run_id, f"SDK run {sdk_run.id} in progress")
                 self.repo.conn.commit()
-                for message in run.messages():
+                last_heartbeat = time.monotonic()
+                for message in sdk_run.messages():
                     if message.type == "assistant":
-                        self.repo.heartbeat_run(ctx.run_id, "Assistant produced output")
+                        summary = self._sanitize_summary(getattr(message, "text", "") or "")
+                        self.repo.heartbeat_run(ctx.run_id, summary or "Assistant produced output")
                         self.repo.conn.commit()
-                result = run.wait()
+                    if time.monotonic() - last_heartbeat >= HEARTBEAT_INTERVAL_SECONDS:
+                        self.repo.heartbeat_run(ctx.run_id, "Worker heartbeat")
+                        self.repo.conn.commit()
+                        last_heartbeat = time.monotonic()
+                result = sdk_run.wait()
                 if result.status == "error":
-                    self.repo.fail_run(ctx.run_id, "SDK_RUN", f"Cursor SDK run failed: {result.id}")
+                    self.repo.fail_run(
+                        ctx.run_id, "SDK_RUN", f"Cursor SDK run failed: {result.id}"
+                    )
                     self.repo.conn.commit()
                     raise RuntimeError(f"Cursor SDK run failed: {result.id}")
+
             existing = self.repo.get_report_for_run(ctx.run_id)
             if existing is not None:
                 return existing
@@ -93,6 +132,12 @@ class CursorSdkWorker:
             raise
         finally:
             cleanup_worker_sandbox(sandbox)
+
+    def _sanitize_summary(self, text: str) -> str:
+        cleaned = re.sub(r"\s+", " ", text).strip()
+        if len(cleaned) > 120:
+            return cleaned[:117] + "..."
+        return cleaned
 
     def _build_prompt(self, subject_node_id: str, run_id: str) -> str:
         return (
@@ -108,24 +153,3 @@ class CursorSdkWorker:
             "proposed_links, literature_refs, estimated_difficulty, confidence.\n"
             "After calling submit_report, reply with the report id only."
         )
-
-    def _fallback_submit(
-        self, ctx: RoleContext, subject_node_id: str, result: Any
-    ) -> ResearchReport:
-        text = getattr(result, "result", "") or ""
-        try:
-            payload = json.loads(text)
-        except json.JSONDecodeError:
-            payload = {
-                "report_type": "worker",
-                "subject_node_id": subject_node_id,
-                "summary": "SDK run completed without MCP submit_report",
-                "information_delta": [text[:500] or "No structured delta returned"],
-                "claims": [{"text": text[:500], "speculative": True}],
-                "proposed_objects": [],
-                "proposed_links": [],
-                "literature_refs": [],
-                "estimated_difficulty": 0.5,
-                "confidence": 0.2,
-            }
-        return self.report_intake.submit(ctx, payload)
