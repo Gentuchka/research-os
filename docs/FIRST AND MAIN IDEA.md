@@ -1,0 +1,24 @@
+Hi, I need to create a system of two mathematician agents who can potentially solve open problems.  
+First, I need you to simply translate the prompts into English and make them more structured.  
+I'll have two agents: the first is a thinker, the second is a worker.  
+The basic idea is this: we're trying to prove or disprove a hypothesis. To do this, we try to come up with strengthening and weakening conditions. For stricter conditions, that is, a narrower class of objects, we try to prove it. For softer conditions, we try to come up with a counterexample and understand why the softer hypothesis didn't work.  
+By throwing out stronger and weaker hypotheses, we're trying to get closer to solving the problem. So, if we've come up with a weaker hypothesis and a counterexample, we must figure out how to strengthen it next, how to make it more rigorous, closer to the main problem. Conversely, if we've proven a hypothesis with a strengthened condition for a narrower class of objects, then we need to figure out how to weaken this strengthened condition so that we can prove it.  
+This way, we'll approach the problem from different angles.  
+I want to create all of this in Obsidian format. So, I want you to create nodes with weakened or strengthened hypotheses. You should write in them what the hypothesis is, what condition we've weakened or strengthened, whether a counterexample has been created/whether the hypothesis has been proven, and how "important" this hypothesis is in your opinion. You should also indicate how likely it is that this hypothesis can be strengthened or weakened, respectively, to bring it closer to the main hypothesis we're solving. There are two options: either the hypothesis is dead and too complex for now, and we need to simplify our problem, or, conversely, it's solved, and we can complicate the problem.  
+Accordingly, if such options exist, they should be listed, and you should also indicate whether there's a node in which the agent has already attempted to implement this idea (to avoid forgetting ideas, it will go through all the idea lists post-factum and see whether it's been tried or not).  
+In short, there are three agents or skills for one agent. I don't know, suggest how to do this.  
+
+The first skill is more like a work checker, an agent who Gives work to the worker and checks the worker's work.  
+It reviews all md files marked as needing review, first checking the evidence/refutations the worker has provided in their reports, looking at the ideas proposed by the worker in each node worked on in the previous step, building connections between nodes, recording them, and most importantly, creating new nodes from the ideas proposed by the worker, and then suggesting new ones based on the connections found, marked as new ones, which the worker should process.  
+
+The second skill is specifically the thinker. It analyzes all the work done. It looks at all the nodes that exist, or that are worth reviewing, and builds connections between nodes, as if there is some kind of connection between ideas.  
+It should already produce a clear, structured analysis. It appears when a clear analysis is required; simply brainstorming ideas no longer works. The Thinker ultimately creates new nodes that weren't obvious to the verifier.  
+
+It then generates a human-readable report detailing what was done and what was processed.  
+[03-Aug-26 23:36] Даня: The Worker, accordingly, has the primary task of processing new nodes proposed by the Thinker. It looks at the node, examines the hypothesis, attempts to prove or disprove it, and finally produces a report on the task. If it has solved the problem, it's a good job and produces a report on the work done, proving or disproving it accordingly. It also provides a list of ideas for further development of this idea, what new nodes to create, and marks the task status as resolved.  
+It also marks the solved problem as the strongest one in its path. For example, there was a weakened hypothesis with a counterexample, we strengthened it, and now we've come up with a counterexample. Consequently, the hypothesis, which is simply a weakened new hypothesis, is completely absorbed by it, since the counterexample is compatible with both hypotheses. Accordingly, he removes the previous hypothesis from its status as closest to the main one.  
+If he couldn't solve a problem, he writes down his assessment of the problem's difficulty, writes down in the report what he was able to do, what he couldn't do, and why, and then writes down what he did, what worked, and suggests ideas for reducing the problem's complexity. He then sets the hypothesis's status to "unsolved."  
+
+I also want to somehow protect myself from potential AI slop that may arise.  
+
+Make a plan for how I can implement all of this.
