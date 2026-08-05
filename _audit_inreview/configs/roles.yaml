@@ -1,0 +1,59 @@
+version: 1
+
+roles:
+  worker:
+    tools:
+      - get_node
+      - history
+      - find_frontier
+      - submit_report
+      - consume_budget
+    deny:
+      - apply_transaction
+      - review_report
+      - dispatch_worker
+
+  reviewer:
+    tools:
+      - get_node
+      - get_report
+      - list_pending_reports
+      - review_report
+      - apply_transaction
+      - replay_projection
+      - graph_statistics
+      - history
+      - find_frontier
+      - compute_metrics
+      - get_activity
+    deny: []
+
+  thinker:
+    tools:
+      - get_node
+      - graph_statistics
+      - find_frontier
+      - history
+      - submit_report
+    deny:
+      - apply_transaction
+      - review_report
+
+  scheduler:
+    tools:
+      - find_frontier
+      - compute_metrics
+      - consume_budget
+      - get_node
+      - graph_statistics
+      - dispatch_worker
+      - get_activity
+      - cancel_run
+    deny:
+      - apply_transaction
+      - submit_report
+      - review_report
+
+  human:
+    tools: all
+    deny: []

@@ -1,0 +1,101 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://research-os.local/schemas/objects.schema.json",
+  "title": "ResearchObject",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "id",
+    "type",
+    "title",
+    "statement",
+    "status",
+    "created_at",
+    "content_hash",
+    "provenance"
+  ],
+  "properties": {
+    "id": {
+      "type": "string",
+      "pattern": "^ros_[a-z]+_[0-9A-Z]+$"
+    },
+    "type": {
+      "type": "string",
+      "enum": [
+        "MainConjecture",
+        "Hypothesis",
+        "Lemma",
+        "Definition",
+        "Technique",
+        "Construction",
+        "Counterexample",
+        "Observation",
+        "Proof",
+        "FailedAttempt",
+        "ResearchQuestion",
+        "Experiment",
+        "Paper",
+        "Report",
+        "DeadEnd"
+      ]
+    },
+    "title": { "type": "string", "minLength": 1 },
+    "statement": { "type": "string", "minLength": 1 },
+    "formalization": { "type": ["string", "null"] },
+    "status": {
+      "type": "string",
+      "enum": [
+        "CANDIDATE",
+        "ACTIVE",
+        "PROVED",
+        "DISPROVED",
+        "SUPERSEDED",
+        "ARCHIVED",
+        "STUCK",
+        "FROZEN",
+        "REJECTED"
+      ]
+    },
+    "created_at": { "type": "string", "format": "date-time" },
+    "admitted_at": { "type": ["string", "null"], "format": "date-time" },
+    "content_hash": {
+      "type": "string",
+      "pattern": "^sha256:[a-f0-9]{64}$"
+    },
+    "equivalence_class_id": { "type": ["string", "null"] },
+    "is_class_representative": { "type": "boolean" },
+    "provenance": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["origin_kind", "origin_refs", "created_by_run"],
+      "properties": {
+        "origin_kind": {
+          "type": "string",
+          "enum": [
+            "main_conjecture",
+            "worker_report",
+            "thinker_proposal",
+            "literature",
+            "existing_hypothesis",
+            "human_directive"
+          ]
+        },
+        "origin_refs": {
+          "type": "array",
+          "items": { "type": "string" },
+          "minItems": 1
+        },
+        "created_by_run": { "type": "string" }
+      }
+    },
+    "evidence_refs": {
+      "type": "array",
+      "items": { "type": "string" }
+    },
+    "information_gain": { "type": "string" },
+    "tags": {
+      "type": "array",
+      "items": { "type": "string" }
+    }
+  }
+}

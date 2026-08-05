@@ -1,0 +1,25 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://research-os.local/schemas/provenance-edges.schema.json",
+  "title": "ProvenanceEdge",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["from_id", "to_id", "edge_type", "created_at", "transaction_id"],
+  "properties": {
+    "from_id": { "type": "string" },
+    "to_id": { "type": "string" },
+    "edge_type": {
+      "type": "string",
+      "enum": [
+        "prov:produced",
+        "prov:inspired",
+        "prov:supported_by",
+        "prov:from_literature",
+        "prov:human_injected",
+        "prov:member_of_class"
+      ]
+    },
+    "created_at": { "type": "string", "format": "date-time" },
+    "transaction_id": { "type": "string" }
+  }
+}

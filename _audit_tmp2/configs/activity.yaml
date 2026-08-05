@@ -1,0 +1,4 @@
+version: 1
+heartbeat_stale_seconds: 120
+refresh_throttle_seconds: 5
+max_recent_failures: 20

@@ -1,0 +1,9 @@
+defaults:
+  attempt_budget: 8
+  token_budget: 200000
+  time_budget_seconds: 3600
+  tool_budget: 50
+  branch_budget: 3
+
+stuck_threshold: 0.95
+frozen_by_human: false

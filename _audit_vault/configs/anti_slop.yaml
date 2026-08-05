@@ -1,0 +1,16 @@
+version: 1
+
+semantic_similarity_threshold: 0.92
+duplicate_content_hash: reject
+
+reject_codes:
+  - SLOP_DUPLICATE_REASONING
+  - SLOP_UNSUPPORTED_CLAIM
+  - SLOP_COSMETIC_VARIANT
+  - SLOP_LOW_INFORMATION
+  - SLOP_HALLUCINATED_REF
+  - SLOP_REPETITIVE_HYP
+  - SLOP_FACT_OPINION_MIX
+  - SLOP_SCOPE_VIOLATION
+
+min_information_delta_items: 1
