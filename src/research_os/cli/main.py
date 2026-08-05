@@ -70,6 +70,23 @@ def _cmd_activity(args: argparse.Namespace) -> int:
     return 0
 
 
+def _cmd_inject(args: argparse.Namespace) -> int:
+    if args.statement_file:
+        statement = Path(args.statement_file).read_text(encoding="utf-8")
+    else:
+        statement = args.statement
+    result = srv.inject_literature(
+        role="human",
+        run_id=_run_id("inject"),
+        title=args.title,
+        statement=statement,
+        information_gain=args.gain,
+        object_type=args.type,
+    )
+    print(f"Created {result.node_id} ({args.type}): {result.title}")
+    return 0
+
+
 def _cmd_resolve_report(args: argparse.Namespace) -> int:
     decision = "ACCEPT" if args.accept else "REJECT"
     result = srv.resolve_needs_human(
@@ -136,6 +153,27 @@ def build_parser() -> argparse.ArgumentParser:
 
     activity = sub.add_parser("activity", help="Print the current agent activity dashboard")
     activity.set_defaults(func=_cmd_activity)
+
+    inject = sub.add_parser(
+        "inject",
+        help="Admit a new object directly (e.g. seed a MainConjecture with your own problem)",
+    )
+    inject.add_argument(
+        "--type", default="MainConjecture", help="Object type (default: MainConjecture)"
+    )
+    inject.add_argument("--title", required=True)
+    stmt_group = inject.add_mutually_exclusive_group(required=True)
+    stmt_group.add_argument("--statement", help="Problem statement text (LaTeX allowed) inline")
+    stmt_group.add_argument(
+        "--statement-file", help="Path to a file (e.g. .tex) containing the statement"
+    )
+    inject.add_argument(
+        "--gain",
+        default="Establishes the main research target.",
+        dest="gain",
+        help="Information-gain justification (required by the schema)",
+    )
+    inject.set_defaults(func=_cmd_inject)
 
     resolve = sub.add_parser("resolve-report", help="Resolve a NEEDS_HUMAN report")
     resolve.add_argument("report_id")

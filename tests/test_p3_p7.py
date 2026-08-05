@@ -428,6 +428,50 @@ def test_cli_resolve_report(mcp_app, reviewer_ctx, worker_ctx):
     assert exit_code == 0
 
 
+def test_cli_inject_inline_statement(mcp_app, capsys):
+    exit_code = cli_main.main(
+        [
+            "inject",
+            "--type",
+            "MainConjecture",
+            "--title",
+            "Twin primes",
+            "--statement",
+            "$\\exists$ infinitely many primes $p$ such that $p+2$ is prime.",
+            "--gain",
+            "Seeds the research target.",
+        ]
+    )
+    assert exit_code == 0
+    out = capsys.readouterr().out
+    assert "MainConjecture" in out
+    assert "Twin primes" in out
+
+    frontier = mcp_server.find_frontier(role="human", run_id="run_frontier")
+    assert any(node["title"] == "Twin primes" for node in frontier)
+
+
+def test_cli_inject_statement_file(mcp_app, tmp_path, capsys):
+    tex_path = tmp_path / "problem.tex"
+    tex_path.write_text(
+        "\\[ \\forall n > 2,\\ x^n + y^n = z^n \\text{ has no positive integer solutions.} \\]",
+        encoding="utf-8",
+    )
+    exit_code = cli_main.main(
+        [
+            "inject",
+            "--title",
+            "Fermat-like",
+            "--statement-file",
+            str(tex_path),
+            "--gain",
+            "Seeds the research target from a LaTeX file.",
+        ]
+    )
+    assert exit_code == 0
+    assert "Fermat-like" in capsys.readouterr().out
+
+
 # ---------------------------------------------------------------------------
 # P5.2 vault v2, P5.4 activity v2, P7 daemon/backup/analytics
 # ---------------------------------------------------------------------------

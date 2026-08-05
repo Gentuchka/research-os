@@ -53,7 +53,36 @@ See `docs/architecture/` and `docs/decisions/`.
 - Isolated per-run sandbox with fail-closed Cursor hooks (MCP-only)
 - Auto-refreshed human-readable panel at `vault/00_meta/AGENT_ACTIVITY.md`
 
-**Deferred to P3+:** weighted frontier optimization, Thinker global passes, embedding-backed semantic dedup, custom Obsidian plugin.
+**P3 — Human-in-the-loop and Thinker**
+
+- Human operator MCP tools: `pin_node`, `freeze_node`/`unfreeze_node`, `inject_literature`, `override_budget`, `resolve_needs_human`
+- Thinker agent + `dispatch_thinker` scheduler tool for periodic global synthesis passes
+
+**P4 — Search, dedup, lifecycle**
+
+- Embedding-backed semantic search/read tools (`semantic_search`, `find_similar`, `find_orphans`, `find_dead_nodes`, `timeline`, `nearest_main`, `search_by_definition`, `search_counterexamples`, `search_techniques`)
+- Duplicate detection and equivalence-class merge (`find_duplicate`, `merge_duplicate`) — textual/semantic similarity only, never gates acceptance
+- Automatic superseding and `STUCK` lifecycle wiring
+
+**P5 — Vault v2, activity v2, operator CLI**
+
+- `vault/00_meta/STATISTICS.md` and `TIMELINE.md`, regenerated on every accepted transaction
+- Activity dashboard "Needs human" section for `NEEDS_HUMAN` reports
+- Operator CLI (`ros`) — see [`docs/RUNNING.md`](docs/RUNNING.md)
+
+**P6 — Formal export scaffold**
+
+- `export_formal` MCP tool renders a non-gating, explicitly "NOT VERIFIED" Lean-style text stub. It never sets verification status — acceptance remains a Reviewer decision.
+
+**P7 — Longevity and unattended operation**
+
+- Scheduler daemon (`research-os-scheduler`) for continuous polling/dispatch
+- Backup/restore (`ros backup`, `ros restore`) via online SQLite snapshots + vault manifest
+- Weekly analytics report (`ros weekly-report`) — review throughput, budget burn, research velocity
+
+**Deferred:** Obsidian TypeScript plugin (P5.1), SQLite→Postgres scale evaluation (P7.4), chaos/load testing (P7.5).
+
+**Constraint honored throughout P3-P7:** proof/counterexample acceptance is always a Reviewer decision (deterministic anti-slop + LLM/human judgment). Nothing added performs numeric/mechanical verification — embedding search is textual similarity only, auto-superseding is structural bookkeeping, and formal export never gates anything.
 
 ## P1–P2 completion notes
 
@@ -65,41 +94,25 @@ See `docs/architecture/` and `docs/decisions/`.
 - Projection replay via `replay_projection`
 - Activity panel writes atomically; `AGENT_ACTIVITY.md` is gitignored
 
-## Setup
+## Setup and running
 
-Requires Python 3.12+.
+See [`docs/RUNNING.md`](docs/RUNNING.md) for full setup, the MCP server, the
+`ros` operator CLI, the scheduler daemon, backups, and — importantly — how to
+connect Codex CLI, Cursor, or GitHub Copilot to this project's MCP server
+(config files for all three are already checked in under `.vscode/`,
+`.cursor/`, and `.codex/`).
+
+Quick start:
 
 ```powershell
 cd C:\!PROG\research-os
 python -m venv .venv
 .\.venv\Scripts\Activate.ps1
 pip install -e ".[dev]"
-pytest
-```
-
-For live Cursor SDK workers:
-
-```powershell
-pip install -e ".[dev,sdk]"
-$env:CURSOR_API_KEY = "cursor_..."
-$env:RESEARCH_OS_USE_LIVE_SDK = "1"
+pytest -q
 ```
 
 Locked dependencies are recorded in `requirements.lock`.
-
-## MCP server
-
-```powershell
-research-os-mcp
-```
-
-Or:
-
-```powershell
-python -m research_os.mcp_server.server
-```
-
-Set `RESEARCH_OS_REPO` when launching MCP from a worker sandbox so the server points at the real canonical store.
 
 ### Report flow
 
@@ -127,30 +140,16 @@ Edit `configs/models.yaml` to choose Worker / Reviewer / Thinker profiles. Befor
 
 ## Layout
 
-- `docs/` — architecture and ADRs
+- `docs/` — architecture, ADRs, and [`RUNNING.md`](docs/RUNNING.md) (setup/run guide)
 - `schemas/` — JSON schemas for objects, edges, events, reports
 - `configs/` — roles, models, frontier, budgets, anti-slop, activity
-- `src/research_os/` — kernel, store, MCP, projection, scheduler, agents
+- `src/research_os/` — kernel, store, MCP, projection, scheduler, agents, CLI, daemon, backup, analytics
 - `vault/` — Obsidian projection (generated; do not hand-edit)
 - `data/canonical/` — SQLite database (not committed)
 - `tests/` — invariant, reviewer, scheduler, migration, and activity tests
 
-## Testing
+## Testing and operational recovery
 
-```powershell
-pytest -q
-ruff check src tests
-```
-
-Optional live SDK smoke test (requires network + API key):
-
-```powershell
-$env:RESEARCH_OS_LIVE_SDK_TEST = "1"
-pytest tests/test_live_sdk.py -q
-```
-
-## Operational recovery
-
-- **Projection/Git failed after accepted DB commit:** inspect `transactions.projection_status` and replay projection from the accepted transaction payload.
-- **Stale worker:** check `AGENT_ACTIVITY.md` Problems section and `agent_runs` / `agent_events` tables.
-- **Rejected report:** see `vault/03_reports/` and `data/rejections/` for reason codes.
+See [`docs/RUNNING.md`](docs/RUNNING.md) for the full test commands and the
+operational recovery runbook (stale workers, rejected reports, disaster
+recovery via `ros backup`/`ros restore`).
