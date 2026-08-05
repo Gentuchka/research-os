@@ -28,6 +28,8 @@ sdk = [
 
 [project.scripts]
 research-os-mcp = "research_os.mcp_server.server:main"
+research-os-scheduler = "research_os.daemon.scheduler_daemon:main"
+ros = "research_os.cli.main:main"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/research_os"]

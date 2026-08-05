@@ -8,6 +8,16 @@ roles:
       - find_frontier
       - submit_report
       - consume_budget
+      - semantic_search
+      - find_similar
+      - find_orphans
+      - find_dead_nodes
+      - timeline
+      - nearest_main
+      - search_by_definition
+      - search_counterexamples
+      - search_techniques
+      - find_duplicate
     deny:
       - apply_transaction
       - review_report
@@ -26,6 +36,19 @@ roles:
       - find_frontier
       - compute_metrics
       - get_activity
+      - resolve_needs_human
+      - semantic_search
+      - find_similar
+      - find_orphans
+      - find_dead_nodes
+      - timeline
+      - nearest_main
+      - search_by_definition
+      - search_counterexamples
+      - search_techniques
+      - find_duplicate
+      - merge_duplicate
+      - export_formal
     deny: []
 
   thinker:
@@ -35,6 +58,16 @@ roles:
       - find_frontier
       - history
       - submit_report
+      - semantic_search
+      - find_similar
+      - find_orphans
+      - find_dead_nodes
+      - timeline
+      - nearest_main
+      - search_by_definition
+      - search_counterexamples
+      - search_techniques
+      - find_duplicate
     deny:
       - apply_transaction
       - review_report
@@ -47,6 +80,7 @@ roles:
       - get_node
       - graph_statistics
       - dispatch_worker
+      - dispatch_thinker
       - get_activity
       - cancel_run
     deny:
@@ -57,3 +91,4 @@ roles:
   human:
     tools: all
     deny: []
+

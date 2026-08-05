@@ -1,0 +1,35 @@
+{
+  "id": "ros_tx_01KZA0GKPBHJ5EZVM6632459JW",
+  "actor_role": "human",
+  "actor_run_id": "run_cli_inject_01KZA0GKNQ3CXNK019ZCQYGRXT",
+  "summary": "Inject literature: Calegari: virtual surface subgroups represent rational H2 classes in hyperbolic groups",
+  "created_at": "2026-08-05T22:25:42.091896+00:00",
+  "ops": [
+    {
+      "op_type": "append_node",
+      "object": {
+        "id": "ros_mc_01KZA0GKPBHJ5EZVM6632459JV",
+        "type": "MainConjecture",
+        "title": "Calegari: virtual surface subgroups represent rational H2 classes in hyperbolic groups",
+        "statement": "\\begin{conjecture}[D.~Calegari]\nLet $G$ be a hyperbolic group. Then every rational $2$-dimensional homology class is virtually represented by a sum of surface subgroups. More precisely, for every\n\\[\n\\alpha \\in H_2(G;\\mathbb{Q}),\n\\]\nthere exist a finite collection of closed oriented surfaces $S_i$ and injective homomorphisms\n\\[\n\\rho_i : \\pi_1(S_i) \\to G\n\\]\nsuch that\n\\[\n\\sum_i [S_i] = n\\alpha,\n\\]\nwhere $[S_i]$ denotes the image of the fundamental class of $S_i$ in $H_2(G)$.\n\\end{conjecture}\n",
+        "formalization": null,
+        "status": "ACTIVE",
+        "created_at": "2026-08-05T22:25:42.091687+00:00",
+        "admitted_at": "2026-08-05T22:25:42.091687+00:00",
+        "content_hash": "sha256:217c444a229fa864bb5c18aeeeaa1564439bb868e432f077e005491844b0bfe8",
+        "equivalence_class_id": null,
+        "is_class_representative": true,
+        "provenance": {
+          "origin_kind": "human_directive",
+          "origin_refs": [
+            "bootstrap"
+          ],
+          "created_by_run": "run_cli_inject_01KZA0GKNQ3CXNK019ZCQYGRXT"
+        },
+        "evidence_refs": [],
+        "tags": [],
+        "information_gain": "Seeds the main research target: a well-known open conjecture in geometric group theory (surface subgroups of hyperbolic groups) attributed to D. Calegari."
+      }
+    }
+  ]
+}

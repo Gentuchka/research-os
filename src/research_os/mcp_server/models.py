@@ -90,3 +90,63 @@ class SubmitReportResult(BaseModel):
     payload: dict[str, Any]
     created_at: str
 
+
+class DispatchThinkerResult(BaseModel):
+    status: str
+    node_id: str | None = None
+    job_id: str | None = None
+    thinker_run_id: str | None = None
+    reviewer_run_id: str | None = None
+    report_id: str | None = None
+    decision: str | None = None
+    reason_codes: list[str] = Field(default_factory=list)
+    reason: str | None = None
+
+
+class PinNodeResult(BaseModel):
+    node_id: str
+    weight: float
+
+
+class SetStatusResult(BaseModel):
+    node_id: str
+    status: str
+    reason: str = ""
+
+
+class InjectLiteratureResult(BaseModel):
+    node_id: str
+    title: str
+
+
+class OverrideBudgetResult(BaseModel):
+    node_id: str
+    budget_name: str
+    new_limit: float
+
+
+class NearestMainResult(BaseModel):
+    node_id: str
+    distance: int | None = None
+    path: list[str] = Field(default_factory=list)
+
+
+class FindDuplicateResult(BaseModel):
+    node_id: str
+    score: float
+
+
+class MergeDuplicateResult(BaseModel):
+    tx_id: str
+    accepted: bool
+    representative_id: str
+    member_id: str
+    rejections: list[dict[str, str]] = Field(default_factory=list)
+
+
+class ExportFormalResult(BaseModel):
+    node_id: str
+    format: str
+    content: str
+
+

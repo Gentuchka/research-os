@@ -13,6 +13,7 @@ venv/
 Thumbs.db
 .idea/
 .vscode/
+!.vscode/mcp.json
 data/canonical/*.db
 data/runs/*
 !data/runs/.gitkeep

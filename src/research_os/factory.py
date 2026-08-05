@@ -12,6 +12,7 @@ from research_os.metrics.engine import MetricsEngine
 from research_os.projection.activity import ActivityProjector
 from research_os.projection.vault import VaultProjector
 from research_os.reports.intake import ReportIntake
+from research_os.reviewer.advisor import build_advisor
 from research_os.reviewer.service import ReviewerService
 from research_os.scheduler.service import SchedulerService
 from research_os.store.connection import connect
@@ -30,6 +31,7 @@ class AppServices:
     vault: VaultProjector
     activity: ActivityProjector
     budgets: BudgetService
+    anti_slop: AntiSlopEngine
 
 
 def build_app(config: RuntimeConfig) -> AppServices:
@@ -42,6 +44,7 @@ def build_app(config: RuntimeConfig) -> AppServices:
     metrics = MetricsEngine(repo, config.frontier_config)
     budgets = BudgetService(repo, config.budgets_config)
     report_intake = ReportIntake(repo)
+    advisor = build_advisor(config.models_config)
     reviewer = ReviewerService(
         repo,
         tx_service,
@@ -50,6 +53,7 @@ def build_app(config: RuntimeConfig) -> AppServices:
         vault,
         activity,
         config.rejections_dir,
+        advisor=advisor,
     )
     scheduler = SchedulerService(repo, report_intake, reviewer, metrics, activity, config)
     return AppServices(
@@ -63,6 +67,7 @@ def build_app(config: RuntimeConfig) -> AppServices:
         vault=vault,
         activity=activity,
         budgets=budgets,
+        anti_slop=anti_slop,
     )
 
 

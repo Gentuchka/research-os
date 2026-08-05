@@ -1,0 +1,14 @@
+# Project-scoped Codex CLI MCP config.
+# Codex only loads this file for projects you have marked as trusted
+# (see `codex --help` / the "trusted projects" section of the Codex docs).
+# Equivalent CLI form:
+#   codex mcp add research-os --env RESEARCH_OS_REPO="c:\!PROG\research-os" \
+#     -- "c:\!PROG\research-os\.venv\Scripts\python.exe" -m research_os.mcp_server.server
+
+[mcp_servers.research-os]
+command = "c:\\!PROG\\research-os\\.venv\\Scripts\\python.exe"
+args = ["-m", "research_os.mcp_server.server"]
+cwd = "c:\\!PROG\\research-os"
+
+[mcp_servers.research-os.env]
+RESEARCH_OS_REPO = "c:\\!PROG\\research-os"

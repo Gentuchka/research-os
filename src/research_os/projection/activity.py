@@ -91,6 +91,17 @@ class ActivityProjector:
                     f"- Job `{job['id']}` on [[{job['node_id']}]] "
                     f"is waiting with status {job['status']}."
                 )
+        lines.extend(["", "## Needs human", ""])
+        needs_human = self.repo.list_needs_human_reports()
+        if not needs_human:
+            lines.append("_No reports are waiting on a human decision._")
+        else:
+            for report in needs_human:
+                lines.append(
+                    f"- Report [[03_reports/{report.id}|{report.id}]] on "
+                    f"[[{report.subject_node_id}]] needs a human ACCEPT/REJECT "
+                    f"(`resolve_needs_human`)."
+                )
         lines.extend(["", "## Recently finished", ""])
         if not recent:
             lines.append("_No completed runs yet._")

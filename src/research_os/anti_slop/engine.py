@@ -5,7 +5,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any
 
-from research_os.anti_slop.similarity import SimilarityBackend, TokenJaccardSimilarity
+from research_os.anti_slop.embedding import build_similarity_backend
+from research_os.anti_slop.similarity import SimilarityBackend
 from research_os.kernel.types import canonical_content_hash
 from research_os.store.repository import Repository
 
@@ -26,7 +27,7 @@ class AntiSlopEngine:
     ) -> None:
         self.repo = repo
         self.config = config
-        self.similarity = similarity or TokenJaccardSimilarity()
+        self.similarity = similarity or build_similarity_backend(config)
 
     def check_report(self, payload: dict[str, Any], *, run_id: str) -> list[SlopFinding]:
         findings: list[SlopFinding] = []

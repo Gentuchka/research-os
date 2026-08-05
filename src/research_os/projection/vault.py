@@ -54,6 +54,65 @@ class VaultProjector:
         path.write_text("\n".join(lines) + "\n", encoding="utf-8")
         return path
 
+    def project_statistics(self) -> Path:
+        """P5.2: vault/00_meta/STATISTICS.md — auto-generated dashboard."""
+        objects = self.repo.list_objects(limit=10_000)
+        statuses: dict[str, int] = {}
+        types: dict[str, int] = {}
+        for obj in objects:
+            statuses[obj.status] = statuses.get(obj.status, 0) + 1
+            types[obj.type] = types.get(obj.type, 0) + 1
+        math_edges = self.repo.list_math_edges()
+        prov_edges = self.repo.list_provenance_edges()
+        path = self.vault_dir / "00_meta" / "STATISTICS.md"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        lines = [
+            "---",
+            "generated_by: VaultProjector.project_statistics",
+            "---",
+            "",
+            "# Research OS statistics",
+            "",
+            f"- Total objects: {len(objects)}",
+            f"- Math edges: {len(math_edges)}",
+            f"- Provenance edges: {len(prov_edges)}",
+            "",
+            "## By status",
+        ]
+        for status, count in sorted(statuses.items()):
+            lines.append(f"- {status}: {count}")
+        lines.extend(["", "## By type"])
+        for obj_type, count in sorted(types.items()):
+            lines.append(f"- {obj_type}: {count}")
+        lines.append("")
+        path.write_text("\n".join(lines), encoding="utf-8")
+        return path
+
+    def project_timeline(self, limit: int = 200) -> Path:
+        """P5.2: vault/00_meta/TIMELINE.md — rolling research timeline."""
+        events = self.repo.list_all_events(limit=limit)
+        path = self.vault_dir / "00_meta" / "TIMELINE.md"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        lines = [
+            "---",
+            "generated_by: VaultProjector.project_timeline",
+            "---",
+            "",
+            "# Research timeline",
+            "",
+            "_Most recent first._",
+            "",
+        ]
+        if not events:
+            lines.append("_No events yet._")
+        else:
+            for event in events:
+                node_ref = f" [[{event['node_id']}]]" if event.get("node_id") else ""
+                lines.append(f"- {event['created_at']}: {event['event_type']}{node_ref}")
+        lines.append("")
+        path.write_text("\n".join(lines), encoding="utf-8")
+        return path
+
     def project_report(
         self,
         report,

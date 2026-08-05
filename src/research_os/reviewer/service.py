@@ -14,7 +14,9 @@ from research_os.kernel.types import (
     AgentRole,
     AppendNodeOp,
     CreateLinkOp,
+    Operation,
     RoleContext,
+    SetStatusOp,
     Transaction,
     new_tx_id,
     utc_now,
@@ -28,7 +30,12 @@ from research_os.reports.types import (
     ReviewDecisionKind,
     new_decision_id,
 )
+from research_os.reviewer.advisor import NullAdvisor, ReviewerAdvisor
 from research_os.store.repository import Repository
+
+# Math edge types that indicate a Counterexample has disproved a Hypothesis
+# (P4.2 automatic superseding).
+_DISPROOF_EDGE_TYPES = {"disproved_by", "kills"}
 
 
 @dataclass
@@ -51,6 +58,7 @@ class ReviewerService:
         vault: VaultProjector,
         activity: ActivityProjector,
         rejections_dir: Path | None = None,
+        advisor: ReviewerAdvisor | None = None,
     ) -> None:
         self.repo = repo
         self.tx_service = tx_service
@@ -59,6 +67,7 @@ class ReviewerService:
         self.vault = vault
         self.activity = activity
         self.rejections_dir = rejections_dir
+        self.advisor = advisor or NullAdvisor()
 
     def review_report(self, ctx: RoleContext, report_id: str) -> AdjudicationOutcome:
         if ctx.role not in {AgentRole.REVIEWER, AgentRole.HUMAN}:
@@ -113,6 +122,7 @@ class ReviewerService:
             )
 
         findings = self.anti_slop.check_report(report.payload, run_id=report.run_id)
+        self._run_advisory(report, ctx)
         blocking = [f for f in findings if f.code.startswith("SLOP_") and f.claim_index is None]
         if blocking:
             return self._finalize(
@@ -173,6 +183,7 @@ class ReviewerService:
 
         self.metrics.recompute([op.object.id for op in ops if isinstance(op, AppendNodeOp)])
         self.metrics.recompute([report.subject_node_id])
+        self._auto_supersede(ops, ctx)
         return self._finalize(
             report,
             ctx,
@@ -217,7 +228,10 @@ class ReviewerService:
     ) -> AdjudicationOutcome:
         if self.repo.has_review_decision(report.id):
             existing = self.repo.get_latest_decision(report.id)
-            if existing is not None:
+            # NEEDS_HUMAN is not terminal — a subsequent human_resolve() call
+            # must be allowed to record a real ACCEPT/REJECT decision on top
+            # of it, so only short-circuit for genuinely final decisions.
+            if existing is not None and existing.decision != ReviewDecisionKind.NEEDS_HUMAN.value:
                 return AdjudicationOutcome(
                     decision=existing.decision,
                     reason_codes=existing.reason_codes,
@@ -254,6 +268,154 @@ class ReviewerService:
             apply_result=apply_result,
             accepted_claim_indices=accepted_claim_indices,
             rejected_claim_indices=rejected_claim_indices,
+        )
+
+    def _run_advisory(self, report, ctx: RoleContext) -> None:
+        """Non-blocking advisory pass (P4.5). Never mutates the graph and
+        never affects the deterministic accept/reject decision — notes are
+        recorded purely for human/reviewer awareness."""
+        try:
+            notes = self.advisor.advise(report.payload)
+        except Exception:  # advisory failures must never break review
+            notes = []
+        if not notes:
+            return
+        self.repo._append_agent_event(
+            report.run_id,
+            "REVIEWER_ADVISORY",
+            f"{len(notes)} advisory note(s) for report {report.id}",
+            {"report_id": report.id, "notes": notes},
+        )
+        self.repo.conn.commit()
+
+    def _auto_supersede(self, ops: list[Operation], ctx: RoleContext) -> None:
+        """Structural auto-superseding (P4.2).
+
+        When a Counterexample disproves a Hypothesis in this batch of ops,
+        walk `strengthens` edges from that hypothesis and supersede weaker
+        DISPROVED variants. This is pure graph bookkeeping over edges/statuses
+        already committed by the Reviewer's deterministic decision — it does
+        NOT perform any mathematical/numeric verification of its own.
+        """
+        disproved_ids = {
+            op.node_id
+            for op in ops
+            if isinstance(op, SetStatusOp) and op.status == "DISPROVED"
+        }
+        link_ops = [op for op in ops if isinstance(op, CreateLinkOp)]
+        for link in link_ops:
+            if link.edge_type not in _DISPROOF_EDGE_TYPES:
+                continue
+            target_id = link.to_id if link.to_id in disproved_ids else None
+            target_id = target_id or (link.from_id if link.from_id in disproved_ids else None)
+            if target_id is None:
+                continue
+            self._supersede_weaker_variants(target_id, ctx)
+
+    def _supersede_weaker_variants(self, disproved_id: str, ctx: RoleContext) -> None:
+        edges = self.repo.list_math_edges()
+        # from_id -[strengthens]-> to_id means from_id is a strengthening of
+        # to_id (from_id logically implies to_id, i.e. from_id is stronger).
+        # If to_id (the weaker statement) was just disproved, then by modus
+        # tollens from_id (the stronger statement that implies it) must also
+        # be false — so from_id is redundant and can be superseded by the
+        # disproof of to_id.
+        for from_id, to_id, edge_type in edges:
+            if edge_type != "strengthens" or to_id != disproved_id:
+                continue
+            stronger = self.repo.get_object(from_id)
+            if stronger is None or stronger.status not in {"ACTIVE", "STUCK", "FROZEN"}:
+                continue
+            # Use SetStatusOp rather than SupersedeNodeOp: SupersedeNodeOp always
+            # inserts a new_id -> old_id "supersedes" edge, which would create a
+            # 2-cycle with the existing (stronger -[strengthens]-> disproved_id)
+            # edge and be rejected by the acyclic-graph invariant. SUPERSEDED is
+            # already a legal ACTIVE-state transition for SetStatusOp.
+            tx = Transaction(
+                id=new_tx_id(),
+                actor_role=ctx.role.value,
+                actor_run_id=ctx.run_id,
+                summary=f"Auto-supersede {from_id} redundant with disproved {disproved_id}",
+                ops=[
+                    SetStatusOp(
+                        node_id=from_id,
+                        status="SUPERSEDED",
+                        evidence_refs=[],
+                        reason=(
+                            f"auto_supersede: strengthens disproved node {disproved_id}; "
+                            "redundant by modus tollens"
+                        ),
+                    )
+                ],
+            )
+            self.tx_service.apply(ctx, tx)
+
+    def human_resolve(
+        self, ctx: RoleContext, report_id: str, *, decision: str, note: str = ""
+    ) -> AdjudicationOutcome:
+        """Resolve a NEEDS_HUMAN report (P3.5). Only the `human` role may
+        call this; `decision` must be ACCEPT or REJECT. Reuses the same
+        claim-partitioning/apply/finalize pipeline as automated review."""
+        if ctx.role != AgentRole.HUMAN:
+            raise PermissionError("Only the human role may resolve NEEDS_HUMAN reports")
+        if decision not in {"ACCEPT", "REJECT"}:
+            raise ValueError("decision must be ACCEPT or REJECT")
+        report = self.repo.get_report(report_id)
+        if report is None:
+            raise ValueError(f"Unknown report: {report_id}")
+        if report.status != ReportStatus.NEEDS_HUMAN.value:
+            raise ValueError(f"Report {report_id} is not NEEDS_HUMAN (status={report.status})")
+
+        claims = report.payload.get("claims", [])
+        all_indices = list(range(len(claims)))
+        if decision == "REJECT":
+            return self._finalize(
+                report,
+                ctx,
+                ReviewDecisionKind.REJECT.value,
+                [f"HUMAN_REJECT: {note}" if note else "HUMAN_REJECT"],
+                [],
+                all_indices,
+                None,
+                None,
+                ReportStatus.REJECTED.value,
+            )
+
+        ops = self._build_ops(report, report.run_id, all_indices)
+        tx = Transaction(
+            id=new_tx_id(),
+            actor_role=ctx.role.value,
+            actor_run_id=ctx.run_id,
+            summary=f"Human-resolved accept report {report_id}",
+            ops=ops,
+        )
+        apply_result = self.tx_service.apply(ctx, tx)
+        if not apply_result.accepted:
+            return self._finalize(
+                report,
+                ctx,
+                ReviewDecisionKind.REJECT.value,
+                [r["code"] for r in apply_result.rejections],
+                [],
+                all_indices,
+                tx,
+                apply_result,
+                ReportStatus.REJECTED.value,
+            )
+        self.metrics.recompute([op.object.id for op in ops if isinstance(op, AppendNodeOp)])
+        self.metrics.recompute([report.subject_node_id])
+        self._auto_supersede(ops, ctx)
+        reason_codes = [f"HUMAN_ACCEPT: {note}"] if note else ["HUMAN_ACCEPT"]
+        return self._finalize(
+            report,
+            ctx,
+            ReviewDecisionKind.ACCEPT.value,
+            reason_codes,
+            all_indices,
+            [],
+            tx,
+            apply_result,
+            ReportStatus.ACCEPTED.value,
         )
 
     def _export_rejection(self, report, decision: ReviewDecision) -> None:

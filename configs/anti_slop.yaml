@@ -1,5 +1,8 @@
 version: 1
 
+# hashing_embedding (default, offline hashed char n-gram cosine similarity)
+# or token_jaccard (legacy exact-token overlap)
+similarity_backend: hashing_embedding
 semantic_similarity_threshold: 0.92
 duplicate_content_hash: reject
 

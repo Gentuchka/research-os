@@ -67,6 +67,8 @@ class TransactionService:
             try:
                 projected_paths = self.projector.project_nodes(affected)
                 self.projector.project_frontier()
+                self.projector.project_statistics()
+                self.projector.project_timeline()
                 if self.config.git_commit_enabled:
                     git_sha = commit_transaction(
                         repo_root=self.config.repo_root,
@@ -190,6 +192,8 @@ class TransactionService:
         try:
             projected_paths = self.projector.project_nodes(node_ids)
             self.projector.project_frontier()
+            self.projector.project_statistics()
+            self.projector.project_timeline()
             if self.config.git_commit_enabled:
                 git_sha = commit_transaction(
                     repo_root=self.config.repo_root,

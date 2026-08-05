@@ -55,16 +55,27 @@ class Repository:
         ).fetchone()
         return row is not None
 
-    def list_objects(self, *, status: str | None = None, limit: int = 100) -> list[ResearchObject]:
+    def list_objects(
+        self,
+        *,
+        status: str | None = None,
+        object_type: str | None = None,
+        limit: int = 100,
+    ) -> list[ResearchObject]:
+        clauses: list[str] = []
+        params: list[Any] = []
         if status:
-            rows = self.conn.execute(
-                "SELECT * FROM objects WHERE status = ? ORDER BY created_at LIMIT ?",
-                (status, limit),
-            ).fetchall()
-        else:
-            rows = self.conn.execute(
-                "SELECT * FROM objects ORDER BY created_at LIMIT ?", (limit,)
-            ).fetchall()
+            clauses.append("status = ?")
+            params.append(status)
+        if object_type:
+            clauses.append("type = ?")
+            params.append(object_type)
+        where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
+        params.append(limit)
+        rows = self.conn.execute(
+            f"SELECT * FROM objects {where} ORDER BY created_at LIMIT ?",
+            tuple(params),
+        ).fetchall()
         return [self._row_to_object(row) for row in rows]
 
     def list_math_edges(self) -> list[tuple[str, str, str]]:
@@ -670,6 +681,13 @@ class Repository:
         ).fetchall()
         return [self._row_to_report(row) for row in rows]
 
+    def list_needs_human_reports(self) -> list[ResearchReport]:
+        rows = self.conn.execute(
+            "SELECT * FROM reports WHERE status = ? ORDER BY created_at",
+            (ReportStatus.NEEDS_HUMAN.value,),
+        ).fetchall()
+        return [self._row_to_report(row) for row in rows]
+
     def update_report_status(self, report_id: str, status: str) -> None:
         self.conn.execute("UPDATE reports SET status = ? WHERE id = ?", (status, report_id))
 
@@ -802,6 +820,106 @@ class Repository:
         )
         limit = float(row[column])
         return limit - (current_used + amount)
+
+    def get_budget(self, node_id: str) -> dict[str, Any] | None:
+        row = self.conn.execute("SELECT * FROM budgets WHERE node_id = ?", (node_id,)).fetchone()
+        return None if row is None else dict(row)
+
+    def override_budget(self, node_id: str, budget_name: str, new_limit: float) -> dict[str, Any]:
+        """Set a per-node budget ceiling (human operator override, P3.1).
+
+        Does not touch the *_used counters, only the limit column.
+        """
+        columns = {
+            "attempt": "attempt_budget",
+            "token": "token_budget",
+            "time": "time_budget_seconds",
+            "tool": "tool_budget",
+            "branch": "branch_budget",
+        }
+        column = columns.get(budget_name)
+        if column is None:
+            raise KernelError(
+                InvariantCode.BUDGET_EXHAUSTED,
+                f"Unknown budget name: {budget_name}",
+            )
+        if self.conn.execute(
+            "SELECT 1 FROM budgets WHERE node_id = ?", (node_id,)
+        ).fetchone() is None:
+            self.conn.execute(
+                """
+                INSERT INTO budgets(
+                    node_id, attempt_budget, token_budget, time_budget_seconds,
+                    tool_budget, branch_budget
+                ) VALUES (?, 8, 200000, 3600, 50, 3)
+                """,
+                (node_id,),
+            )
+        self.conn.execute(
+            f"UPDATE budgets SET {column} = ? WHERE node_id = ?",
+            (new_limit, node_id),
+        )
+        return {"node_id": node_id, "budget_name": budget_name, "new_limit": new_limit}
+
+    def list_all_events(self, limit: int = 200) -> list[dict[str, Any]]:
+        rows = self.conn.execute(
+            """
+            SELECT event_type, payload_json, created_at, transaction_id, node_id
+            FROM events
+            ORDER BY id DESC
+            LIMIT ?
+            """,
+            (limit,),
+        ).fetchall()
+        return [
+            {
+                "event_type": row["event_type"],
+                "payload": json.loads(row["payload_json"]),
+                "created_at": row["created_at"],
+                "transaction_id": row["transaction_id"],
+                "node_id": row["node_id"],
+            }
+            for row in rows
+        ]
+
+    def list_review_decisions_since(self, since_iso: str) -> list[dict[str, Any]]:
+        rows = self.conn.execute(
+            """
+            SELECT decision, reason_codes_json, created_at FROM review_decisions
+            WHERE created_at >= ?
+            ORDER BY created_at
+            """,
+            (since_iso,),
+        ).fetchall()
+        return [
+            {
+                "decision": row["decision"],
+                "reason_codes": json.loads(row["reason_codes_json"]),
+                "created_at": row["created_at"],
+            }
+            for row in rows
+        ]
+
+    def list_transactions_since(self, since_iso: str) -> list[dict[str, Any]]:
+        rows = self.conn.execute(
+            """
+            SELECT id, actor_role, summary, created_at, accepted FROM transactions
+            WHERE created_at >= ?
+            ORDER BY created_at
+            """,
+            (since_iso,),
+        ).fetchall()
+        return [dict(row) for row in rows]
+
+    def list_run_budget_usage_since(self, since_iso: str) -> list[dict[str, Any]]:
+        rows = self.conn.execute(
+            """
+            SELECT run_id, budget_name, amount, detail, created_at FROM run_budget_usage
+            WHERE created_at >= ?
+            """,
+            (since_iso,),
+        ).fetchall()
+        return [dict(row) for row in rows]
 
     def start_run(
         self,
